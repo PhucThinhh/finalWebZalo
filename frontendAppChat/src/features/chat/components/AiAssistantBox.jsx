@@ -56,7 +56,7 @@ function AiAssistantBox({ open, onClose, onAsk }) {
   if (!open) return null;
 
   return (
-    <div className="fixed right-6 bottom-6 z-[1200] w-[390px] max-w-[calc(100vw-32px)] overflow-hidden rounded-2xl border border-emerald-500/30 bg-[#0f172a] text-slate-100 shadow-2xl">
+    <div className="fixed left-[104px] top-6 z-[1200] w-[390px] max-w-[calc(100vw-120px)] overflow-hidden rounded-2xl border border-emerald-500/30 bg-[#0f172a] text-slate-100 shadow-2xl">
       <div className="px-4 py-3 border-b border-slate-700/70 bg-[#111827] flex items-center justify-between gap-3">
         <div className="flex items-center gap-3 min-w-0">
           <span className="w-10 h-10 rounded-full bg-emerald-500/15 text-emerald-300 flex items-center justify-center">
@@ -82,7 +82,7 @@ function AiAssistantBox({ open, onClose, onAsk }) {
         </button>
       </div>
 
-      <div ref={scrollRef} className="h-[420px] overflow-y-auto px-4 py-4 space-y-3">
+      <div ref={scrollRef} className="h-[calc(100vh-220px)] min-h-[360px] max-h-[620px] overflow-y-auto px-4 py-4 space-y-3">
         {messages.map((message, index) => {
           const isUser = message.role === "user";
 

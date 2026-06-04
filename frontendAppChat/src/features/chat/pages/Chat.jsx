@@ -1,6 +1,7 @@
 import { useEffect, useState, useMemo, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "react-toastify";
+import { ChevronUp, Mic, MicOff, PhoneOff, Settings, Video } from "lucide-react";
 
 import Sidebar from "../components/Sidebar";
 import ChatBox from "../components/chatBox";
@@ -2975,6 +2976,8 @@ function ChatPage() {
           onChangePassword={() => setShowChangePassword(true)}
           onSelectTab={setActiveTab}
           activeTab={activeTab}
+          aiAssistantOpen={aiAssistantOpen}
+          onToggleAiAssistant={() => setAiAssistantOpen((prev) => !prev)}
         />
       </div>
 
@@ -3704,7 +3707,7 @@ function ChatPage() {
         </div>
       </aside>
 
-      {!aiAssistantOpen && (
+      {false && !aiAssistantOpen && (
         <button
           type="button"
           onClick={() => setAiAssistantOpen(true)}
@@ -5344,9 +5347,11 @@ function ChatPage() {
               <button
                 type="button"
                 onClick={toggleCameraPlaceholder}
-                className="h-14 px-6 rounded-full border border-white/15 bg-white/5 hover:bg-white/10 text-white flex items-center gap-4 transition"
+                className="h-14 min-w-[150px] px-6 rounded-full border border-white/15 bg-white/5 hover:bg-white/10 text-white flex items-center justify-center gap-4 transition [&>span]:hidden"
                 title="Mở camera"
               >
+                <Video size={25} strokeWidth={2.2} />
+                <ChevronUp size={20} className="text-white/70" />
                 <span className="text-2xl">🎥</span>
                 <span className="text-white/70 text-xl">⌃</span>
               </button>
@@ -5354,22 +5359,28 @@ function ChatPage() {
               <button
                 type="button"
                 onClick={endCall}
-                className="w-16 h-16 rounded-full bg-red-500 hover:bg-red-600 text-white flex items-center justify-center text-3xl shadow-lg transition"
+                className="w-16 h-16 rounded-full bg-red-500 hover:bg-red-600 text-white flex items-center justify-center shadow-lg transition [&>span]:hidden"
                 title="Kết thúc cuộc gọi"
               >
-                📞
+                <PhoneOff size={30} strokeWidth={2.4} />
               </button>
 
               <button
                 type="button"
                 onClick={toggleMic}
-                className={`h-14 px-6 rounded-full border flex items-center gap-4 transition ${
+                className={`h-14 min-w-[150px] px-6 rounded-full border flex items-center justify-center gap-4 transition [&>span]:hidden ${
                   isMicMuted
                     ? "bg-red-500/20 border-red-400 text-red-300"
                     : "bg-white/5 border-white/15 text-white hover:bg-white/10"
                 }`}
                 title={isMicMuted ? "Bật micro" : "Tắt micro"}
               >
+                {isMicMuted ? (
+                  <MicOff size={26} strokeWidth={2.2} />
+                ) : (
+                  <Mic size={26} strokeWidth={2.2} />
+                )}
+                <ChevronUp size={20} className="text-white/70" />
                 <span className="text-3xl">{isMicMuted ? "🔇" : "🎙️"}</span>
                 <span className="text-white/70 text-xl">⌃</span>
               </button>
@@ -5377,10 +5388,10 @@ function ChatPage() {
               <button
                 type="button"
                 onClick={() => toast.info("Cài đặt cuộc gọi sẽ làm sau")}
-                className="w-14 h-14 rounded-full hover:bg-white/10 text-white flex items-center justify-center text-3xl transition"
+                className="w-14 h-14 rounded-full border border-white/10 bg-white/5 hover:bg-white/10 text-white flex items-center justify-center transition [&>span]:hidden"
                 title="Cài đặt"
               >
-                ⚙️
+                <Settings size={28} strokeWidth={2.2} />
               </button>
             </div>
           </div>

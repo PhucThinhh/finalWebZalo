@@ -97,6 +97,7 @@ public class UserController {
                 .avatar(user.getAvatar())
                 .coverImage(user.getCoverImage())
                 .role(user.getRole() != null ? user.getRole().name() : null)
+                .locked(Boolean.TRUE.equals(user.getLocked()))
                 .build();
     }
 

@@ -5,6 +5,7 @@ import jakarta.persistence.*;
 import lombok.*;
 
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 
 
 @Entity
@@ -42,4 +43,13 @@ public class User {
     @Enumerated(EnumType.STRING)
     private Role role;
 
+    private Boolean locked = false;
+
+    private LocalDateTime lastLoginAt;
+
+    @Column(length = 80)
+    private String lastLoginIp;
+
+    @Column(length = 512)
+    private String lastLoginUserAgent;
 }
