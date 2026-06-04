@@ -6,6 +6,7 @@ import Sidebar from "../components/Sidebar";
 import ChatBox from "../components/chatBox";
 import ChatInput from "../components/ChatInput";
 import CreateGroup from "../components/CreateGroup";
+import AiAssistantBox from "../components/AiAssistantBox";
 
 import FriendsList from "../../friend/components/FriendsList";
 import FriendRequests from "../../friend/components/FriendRequests";
@@ -56,6 +57,7 @@ import {
   pinMessageApi,
   unpinMessageApi,
   getPinnedMessagesApi,
+  askAiAssistantApi,
 } from "../api/chatApi";
 import { getFriendsApi } from "../../friend/api/friendApi";
 
@@ -95,6 +97,7 @@ function ChatPage() {
   const [showPrivateInfoModal, setShowPrivateInfoModal] = useState(false);
   const [privateInfo, setPrivateInfo] = useState(null);
   const [privateInfoLoading, setPrivateInfoLoading] = useState(false);
+  const [infoPanelOpen, setInfoPanelOpen] = useState(false);
   const [showMessageSearch, setShowMessageSearch] = useState(false);
   const [showGroupMenu, setShowGroupMenu] = useState(false);
   const [groupMemberCount, setGroupMemberCount] = useState(0);
@@ -119,6 +122,7 @@ function ChatPage() {
 
   const [forwardMessage, setForwardMessage] = useState(null);
   const [showForwardModal, setShowForwardModal] = useState(false);
+  const [replyMessage, setReplyMessage] = useState(null);
 
   const [forwardSearch, setForwardSearch] = useState("");
   const [forwardTargets, setForwardTargets] = useState([]);
@@ -142,6 +146,8 @@ function ChatPage() {
 
   const [conversations, setConversations] = useState([]);
   const [selectedConversationId, setSelectedConversationId] = useState(null);
+  const [mutedConversationIds, setMutedConversationIds] = useState(new Set());
+  const [pinnedConversationIds, setPinnedConversationIds] = useState(new Set());
 
   const currentUserId = user?.id || user?._id;
   const selectedGroupRef = useRef(null);
@@ -156,12 +162,23 @@ function ChatPage() {
   const [leavingGroup, setLeavingGroup] = useState(false);
 
   const [pinnedMessages, setPinnedMessages] = useState([]);
+  const [aiAssistantOpen, setAiAssistantOpen] = useState(false);
 
   
 
   const conversationStorageKey = useMemo(() => {
     if (!currentUserId) return null;
     return `chat_conversations_${currentUserId}`;
+  }, [currentUserId]);
+
+  const mutedStorageKey = useMemo(() => {
+    if (!currentUserId) return null;
+    return `chat_muted_conversations_${currentUserId}`;
+  }, [currentUserId]);
+
+  const pinnedConversationStorageKey = useMemo(() => {
+    if (!currentUserId) return null;
+    return `chat_pinned_conversations_${currentUserId}`;
   }, [currentUserId]);
 
   const resolveAvatar = (avatar) => {
@@ -278,6 +295,13 @@ function ChatPage() {
 
   const sortConversationsByLatest = (list) => {
     return [...list].sort((a, b) => {
+      const pinnedA = pinnedConversationIds.has(a.id);
+      const pinnedB = pinnedConversationIds.has(b.id);
+
+      if (pinnedA !== pinnedB) {
+        return pinnedA ? -1 : 1;
+      }
+
       const timeA = a.lastMessageAt ? new Date(a.lastMessageAt).getTime() : 0;
       const timeB = b.lastMessageAt ? new Date(b.lastMessageAt).getTime() : 0;
 
@@ -760,6 +784,51 @@ function ChatPage() {
       console.log("Save conversations localStorage lỗi:", error);
     }
   }, [conversations, conversationStorageKey]);
+
+  useEffect(() => {
+    if (!mutedStorageKey) return;
+
+    try {
+      const saved = localStorage.getItem(mutedStorageKey);
+      const parsed = saved ? JSON.parse(saved) : [];
+      setMutedConversationIds(new Set(Array.isArray(parsed) ? parsed : []));
+    } catch (error) {
+      console.log("Load muted conversations lỗi:", error);
+      setMutedConversationIds(new Set());
+    }
+  }, [mutedStorageKey]);
+
+  useEffect(() => {
+    if (!mutedStorageKey) return;
+
+    localStorage.setItem(
+      mutedStorageKey,
+      JSON.stringify(Array.from(mutedConversationIds))
+    );
+  }, [mutedConversationIds, mutedStorageKey]);
+
+  useEffect(() => {
+    if (!pinnedConversationStorageKey) return;
+
+    try {
+      const saved = localStorage.getItem(pinnedConversationStorageKey);
+      const parsed = saved ? JSON.parse(saved) : [];
+      setPinnedConversationIds(new Set(Array.isArray(parsed) ? parsed : []));
+    } catch (error) {
+      console.log("Load pinned conversations lỗi:", error);
+      setPinnedConversationIds(new Set());
+    }
+  }, [pinnedConversationStorageKey]);
+
+  useEffect(() => {
+    if (!pinnedConversationStorageKey) return;
+
+    localStorage.setItem(
+      pinnedConversationStorageKey,
+      JSON.stringify(Array.from(pinnedConversationIds))
+    );
+    setConversations((prev) => sortConversationsByLatest(prev));
+  }, [pinnedConversationIds, pinnedConversationStorageKey]);
 
   useEffect(() => {
     if (!user?.id) return;
@@ -1719,7 +1788,7 @@ function ChatPage() {
             selectedConversationId === incomingConversationId;
 
           if (isActiveConversation) {
-            addMessage({
+            const incomingMessage = {
               id: message.id,
               senderId: message.senderId,
               receiverId: message.receiverId,
@@ -1749,6 +1818,55 @@ function ChatPage() {
               pinned: message.pinned,
               pinnedBy: message.pinnedBy,
               pinnedAt: message.pinnedAt,
+            };
+
+            setMessages((prev) => {
+              const incomingId = String(incomingMessage.id || "");
+
+              const hasExactMessage = prev.some(
+                (item) => String(item.id || item._id) === incomingId
+              );
+
+              if (hasExactMessage) {
+                return prev.map((item) =>
+                  String(item.id || item._id) === incomingId
+                    ? { ...item, ...incomingMessage }
+                    : item
+                );
+              }
+
+              const tempIndex = prev.findIndex((item) => {
+                if (!item?.tempId) return false;
+                if (Number(item.senderId) !== Number(incomingMessage.senderId)) {
+                  return false;
+                }
+                if (String(item.roomId || "") !== String(incomingMessage.roomId || "")) {
+                  return false;
+                }
+                if (String(item.type || "TEXT") !== String(incomingMessage.type || "TEXT")) {
+                  return false;
+                }
+
+                const sameContent =
+                  String(item.content || "") ===
+                  String(incomingMessage.content || "");
+                const sameFile =
+                  String(item.fileUrl || "") ===
+                  String(incomingMessage.fileUrl || "");
+                const sameReply =
+                  String(item.originalMessageId || "") ===
+                  String(incomingMessage.originalMessageId || "");
+
+                return sameContent && sameFile && sameReply;
+              });
+
+              if (tempIndex < 0) {
+                return [...prev, incomingMessage];
+              }
+
+              return prev.map((item, index) =>
+                index === tempIndex ? incomingMessage : item
+              );
             });
 
             setConversations((prev) => {
@@ -1794,6 +1912,9 @@ function ChatPage() {
 
           if (Number(message.senderId) === Number(currentUserId)) return;
 
+          const isMutedConversation =
+            mutedConversationIds.has(incomingConversationId);
+
           setConversations((prev) => {
             const existed = prev.some(
               (conversation) => conversation.id === incomingConversationId
@@ -1807,7 +1928,7 @@ function ChatPage() {
 
               const restoredConversation = {
                 ...groupMeta,
-                unreadCount: 1,
+                unreadCount: isMutedConversation ? 0 : 1,
                 lastMessageAt: message.createdAt || new Date().toISOString(),
                 lastMessageText: buildLastMessageText(message),
               };
@@ -1819,7 +1940,9 @@ function ChatPage() {
               conversation.id === incomingConversationId
                 ? {
                     ...conversation,
-                    unreadCount: (conversation.unreadCount || 0) + 1,
+                    unreadCount: isMutedConversation
+                      ? conversation.unreadCount || 0
+                      : (conversation.unreadCount || 0) + 1,
                     lastMessageAt:
                       message.createdAt || new Date().toISOString(),
                     lastMessageText: buildLastMessageText(message),
@@ -1978,9 +2101,10 @@ function ChatPage() {
     setMessages,
     joinedGroupRooms,
     removedGroupRooms,
+    mutedConversationIds,
   ]);
 
-  const handleSendMessage = () => {
+  const handleSendMessage = (messageText) => {
     if (selectedGroup && isRemovedFromGroup) {
       console.warn("BLOCK SEND: removed from group", {
         groupId: selectedGroup.id,
@@ -2000,13 +2124,22 @@ function ChatPage() {
       return;
     }
 
-    const content = input?.trim();
+    const content = (messageText ?? input)?.trim();
 
     if (!content) return;
     if (!currentUserId || (!selectedUser && !selectedGroup)) return;
 
     const tempId = `temp_${Date.now()}`;
     const createdAt = new Date().toISOString();
+    const replyMeta = replyMessage
+      ? {
+          originalSenderId: replyMessage.senderId != null
+            ? Number(replyMessage.senderId)
+            : null,
+          originalContent: replyMessage.content || "Tin nhắn",
+          originalMessageId: String(replyMessage.id || ""),
+        }
+      : {};
 
     const msg = {
       tempId,
@@ -2016,6 +2149,7 @@ function ChatPage() {
       content,
       type: "TEXT",
       createdAt,
+      ...replyMeta,
     };
 
     // ✅ Hiện ngay trong box chat của người gửi, không cần reload
@@ -2034,6 +2168,7 @@ function ChatPage() {
       pinned: false,
       pinnedBy: null,
       pinnedAt: null,
+      ...replyMeta,
     });
 
     sendMessageSocket(msg);
@@ -2067,6 +2202,7 @@ function ChatPage() {
     }
 
     setInput("");
+    setReplyMessage(null);
   };
 
   const handleSendFile = (fileUrl) => {
@@ -2091,15 +2227,27 @@ function ChatPage() {
 
     if (!currentUserId || (!selectedUser && !selectedGroup)) return;
 
+    const replyMeta = replyMessage
+      ? {
+          originalSenderId: replyMessage.senderId != null
+            ? Number(replyMessage.senderId)
+            : null,
+          originalContent: replyMessage.content || "Tin nhắn",
+          originalMessageId: String(replyMessage.id || ""),
+        }
+      : {};
+
     const msg = {
       senderId: Number(currentUserId),
       receiverId: selectedUser?.id || null,
       roomId,
       type: "FILE",
       fileUrl,
+      ...replyMeta,
     };
 
     sendMessageSocket(msg);
+    setReplyMessage(null);
   };
 
   const handleSelectUser = async (u) => {
@@ -2569,9 +2717,251 @@ function ChatPage() {
     }
   };
 
+  const handleOpenUserProfile = async (profileUser) => {
+    const targetId = profileUser?.id || profileUser?.userId;
+    if (!targetId) return;
+
+    setShowMenu(false);
+    setPrivateInfo(profileUser);
+    setShowPrivateInfoModal(true);
+
+    try {
+      setPrivateInfoLoading(true);
+      const res = await getUserInfoApi(targetId);
+      setPrivateInfo(res.data);
+    } catch (error) {
+      console.error("Load user info lỗi:", error);
+      toast.error("Không tải được thông tin người dùng");
+    } finally {
+      setPrivateInfoLoading(false);
+    }
+  };
+
   const currentAvatar = selectedGroup
     ? resolveAvatar(selectedGroup?.avatar)
     : resolveAvatar(selectedUser?.avatar);
+
+  const resolveChatAsset = (url) => {
+    if (!url) return "";
+    const value = String(url);
+    if (value.startsWith("data:") || value.startsWith("http")) return value;
+    if (value.startsWith("/")) return `http://localhost:8080${value}`;
+    return `http://localhost:8080/uploads/${value}`;
+  };
+
+  const sharedMediaMessages = messages.filter(
+    (msg) =>
+      msg?.fileUrl &&
+      String(msg.fileUrl).match(/\.(jpg|jpeg|png|gif|webp)(\?|$)/i)
+  );
+
+  const sharedFileMessages = messages.filter(
+    (msg) =>
+      msg?.fileUrl &&
+      !String(msg.fileUrl).match(/\.(jpg|jpeg|png|gif|webp)(\?|$)/i)
+  );
+
+  const sharedLinks = messages
+    .map((msg) => {
+      const text = String(msg?.content || msg?.text || "");
+      const match = text.match(/https?:\/\/[^\s]+/i);
+      return match
+        ? {
+            id: msg.id || msg._id || `${match[0]}_${msg.createdAt || ""}`,
+            url: match[0],
+            createdAt: msg.createdAt,
+          }
+        : null;
+    })
+    .filter(Boolean);
+
+  const formatAiMessage = (msg) => {
+    const senderId = msg.senderId || msg.sender?._id || msg.sender || msg.userId;
+    const senderName =
+      Number(senderId) === Number(currentUserId)
+        ? "Bạn"
+        : msg.senderName || msg.sender?.username || selectedUser?.username || "Người khác";
+
+    return {
+      id: msg.id || msg._id,
+      senderId,
+      senderName,
+      type: msg.type || "TEXT",
+      content:
+        msg.content ||
+        msg.text ||
+        msg.originalContent ||
+        (msg.fileUrl ? "Tệp đính kèm" : ""),
+      fileUrl: msg.fileUrl || "",
+      createdAt: msg.createdAt || "",
+      recalled: Boolean(msg.isRecalled),
+      pinned: Boolean(msg.pinned),
+    };
+  };
+
+  const buildAiAssistantContext = async () => {
+    let friends = [];
+
+    try {
+      const res = await getFriendsApi();
+      friends = Array.isArray(res.data) ? res.data : [];
+    } catch (error) {
+      console.log("Load friends for AI assistant lỗi:", error);
+    }
+
+    const normalizedFriends = friends
+      .map((friend) => {
+        const id = getFriendId(friend);
+        return {
+          id,
+          name: getFriendName(friend),
+          online: onlineUsers.has(Number(id)),
+        };
+      })
+      .filter((friend) => friend.id);
+
+    const onlineFriends = normalizedFriends.filter((friend) => friend.online);
+    const currentConversation = selectedGroup
+      ? {
+          type: "GROUP",
+          id: selectedGroup.id,
+          name: selectedGroup.name,
+          roomId,
+          memberCount: groupMemberCount,
+        }
+      : selectedUser
+        ? {
+            type: "PRIVATE",
+            id: selectedUser.id,
+            name: friendNickname || selectedUser.username,
+            roomId,
+            online: onlineUsers.has(Number(selectedUser.id)),
+          }
+        : null;
+
+    const context = {
+      currentUser: {
+        id: currentUserId,
+        username: user?.username,
+        phone: user?.phone,
+        email: user?.email,
+      },
+      friends: {
+        total: normalizedFriends.length,
+        onlineCount: onlineFriends.length,
+        online: onlineFriends,
+        all: normalizedFriends.slice(0, 80),
+      },
+      conversations: conversations.slice(0, 30).map((conversation) => ({
+        id: conversation.id,
+        type: conversation.type,
+        name: conversation.name,
+        roomId: conversation.roomId,
+        lastMessageText: conversation.lastMessageText,
+        unreadCount: conversation.unreadCount || 0,
+        pinned: pinnedConversationIds.has(conversation.id),
+        muted: mutedConversationIds.has(conversation.id),
+      })),
+      currentConversation,
+      currentConversationData: {
+        messageCount: messages.length,
+        recentMessages: messages.slice(-40).map(formatAiMessage),
+        pinnedMessages: pinnedMessages.slice(0, 10).map(formatAiMessage),
+        images: sharedMediaMessages.slice(0, 30).map((msg) => ({
+          id: msg.id || msg._id,
+          fileUrl: msg.fileUrl,
+          senderId: msg.senderId,
+          createdAt: msg.createdAt,
+        })),
+        files: sharedFileMessages.slice(0, 30).map((msg) => ({
+          id: msg.id || msg._id,
+          fileUrl: msg.fileUrl,
+          fileName: String(msg.fileUrl || "").split("/").pop(),
+          senderId: msg.senderId,
+          createdAt: msg.createdAt,
+        })),
+        links: sharedLinks.slice(0, 30),
+      },
+    };
+
+    return JSON.stringify(context, null, 2).slice(0, 14000);
+  };
+
+  const handleAskAiAssistant = async (question) => {
+    const context = await buildAiAssistantContext();
+    const res = await askAiAssistantApi({
+      question,
+      context,
+    });
+
+    return res.data?.answer || "AI chưa có phản hồi.";
+  };
+
+  const handleToggleBlockUser = async () => {
+    if (!selectedUser?.id) return;
+
+    try {
+      if (blockStatus.blockedByMe) {
+        await unblockUserApi(selectedUser.id);
+        toast.success("Đã bỏ chặn người dùng");
+      } else {
+        await blockUserApi(selectedUser.id);
+        toast.success("Đã chặn người dùng");
+      }
+
+      const res = await getBlockStatusApi(selectedUser.id);
+
+      setBlockStatus({
+        blockedByMe: res.data?.blockedByMe ?? false,
+        blockedByOther: res.data?.blockedByOther ?? false,
+      });
+    } catch (error) {
+      console.log("Block/unblock lỗi:", error);
+      toast.error("Thao tác thất bại");
+    }
+  };
+
+  const handleToggleMuteConversation = () => {
+    if (!selectedConversationId) return;
+
+    setMutedConversationIds((prev) => {
+      const next = new Set(prev);
+
+      if (next.has(selectedConversationId)) {
+        next.delete(selectedConversationId);
+        toast.success("Đã bật thông báo hội thoại");
+      } else {
+        next.add(selectedConversationId);
+        toast.success("Đã tắt thông báo hội thoại");
+      }
+
+      return next;
+    });
+  };
+
+  const handleTogglePinConversation = () => {
+    if (!selectedConversationId) return;
+
+    setPinnedConversationIds((prev) => {
+      const next = new Set(prev);
+
+      if (next.has(selectedConversationId)) {
+        next.delete(selectedConversationId);
+        toast.success("Đã bỏ ghim hội thoại");
+      } else {
+        next.add(selectedConversationId);
+        toast.success("Đã ghim hội thoại");
+      }
+
+      return next;
+    });
+  };
+
+  const isCurrentConversationMuted =
+    !!selectedConversationId && mutedConversationIds.has(selectedConversationId);
+
+  const isCurrentConversationPinned =
+    !!selectedConversationId && pinnedConversationIds.has(selectedConversationId);
 
   return (
     <div className="w-screen h-screen flex bg-[#0f172a] overflow-hidden text-slate-200 font-sans relative">
@@ -2607,6 +2997,7 @@ function ChatPage() {
             ) : (
               conversations.map((item) => {
                 const isActive = selectedConversationId === item.id;
+                const isPinnedConversation = pinnedConversationIds.has(item.id);
 
                 return (
                   <button
@@ -2630,6 +3021,29 @@ function ChatPage() {
                     <div className="min-w-0 flex-1">
                       <div className="text-white font-medium truncate flex items-center justify-between gap-2">
                         <span className="truncate">{item.name}</span>
+                        {isPinnedConversation && (
+                          <span
+                            title="Da ghim hoi thoai"
+                            className="shrink-0 inline-flex h-5 w-5 items-center justify-center rounded-full bg-blue-500/20 text-blue-200"
+                          >
+                            <svg
+                              viewBox="0 0 24 24"
+                              className="h-3.5 w-3.5"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="2.2"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              aria-hidden="true"
+                            >
+                              <path d="M12 17v5" />
+                              <path d="M9 10.5 4.5 15" />
+                              <path d="m14 4 6 6" />
+                              <path d="m5 14 5 5" />
+                              <path d="m8 12 7-7 4 4-7 7" />
+                            </svg>
+                          </span>
+                        )}
                         {item.unreadCount > 0 && (
                           <span className="min-w-[22px] h-[22px] px-1.5 rounded-full bg-blue-500 text-white text-[11px] leading-[22px] text-center font-semibold">
                             {item.unreadCount > 99 ? "99+" : item.unreadCount}
@@ -2651,7 +3065,7 @@ function ChatPage() {
         </aside>
       )}
 
-      <main className="flex-1 flex flex-col bg-gradient-to-b from-[#1e293b] to-[#0f172a] relative z-40">
+      <main className="flex-1 min-w-0 flex flex-col bg-gradient-to-b from-[#1e293b] to-[#0f172a] relative z-40 transition-[width,flex-basis] duration-300 ease-out">
         {activeTab === "chat" &&
           (!selectedUser && !selectedGroup ? (
             <div className="flex-1 flex flex-col items-center justify-center space-y-4">
@@ -2675,7 +3089,7 @@ function ChatPage() {
                       className="relative w-14 h-14 rounded-full object-cover border-2 border-slate-900 bg-slate-700 cursor-pointer shadow-lg"
                       onClick={() => {
                         if (selectedGroup) {
-                          setShowGroupMenu(true);
+                          setInfoPanelOpen(true);
                         } else {
                           handleOpenPrivateInfoModal();
                         }
@@ -2715,9 +3129,7 @@ function ChatPage() {
                   <div className="flex flex-col min-w-0">
                     <h2
                       onClick={() => {
-                        if (!selectedGroup) {
-                          handleOpenPrivateInfoModal();
-                        }
+                        setInfoPanelOpen(true);
                       }}
                       className={`!text-white text-[22px] font-bold tracking-wide truncate max-w-[720px] drop-shadow-sm ${
                         !selectedGroup
@@ -2792,6 +3204,21 @@ function ChatPage() {
                       📞
                     </button>
                   )}
+
+                  <button
+                    type="button"
+                    onClick={() => setInfoPanelOpen((prev) => !prev)}
+                    className={`w-11 h-11 rounded-full flex items-center justify-center transition ${
+                      infoPanelOpen
+                        ? "bg-blue-500/20 text-blue-300"
+                        : "text-slate-300 hover:bg-white/10 hover:text-white"
+                    }`}
+                    title="Thông tin hội thoại"
+                  >
+                    <span className="relative w-[22px] h-[18px] rounded-sm border-2 border-current inline-flex">
+                      <span className="w-[7px] border-r-2 border-current h-full" />
+                    </span>
+                  </button>
                 </div>
               </header>
 
@@ -2894,6 +3321,8 @@ function ChatPage() {
                   currentUserId={currentUserId}
                   setMessages={setMessages}
                   onForwardMessage={handleForwardClick}
+                  onReplyMessage={setReplyMessage}
+                  onOpenUserProfile={handleOpenUserProfile}
                   onPinMessage={handlePinMessage}
                   onUnpinMessage={handleUnpinMessage}
                   pollRealtimeMap={pollRealtimeMap}
@@ -2933,6 +3362,8 @@ function ChatPage() {
                       onSend={handleSendMessage}
                       onSendFile={handleSendFile}
                       onOpenPoll={() => setShowPollModal(true)}
+                      replyToMessage={replyMessage}
+                      onCancelReply={() => setReplyMessage(null)}
                     />
                   )
                 ) : blockStatus.blockedByMe ? (
@@ -2949,6 +3380,8 @@ function ChatPage() {
                     setInput={setInput}
                     onSend={handleSendMessage}
                     onSendFile={handleSendFile}
+                    replyToMessage={replyMessage}
+                    onCancelReply={() => setReplyMessage(null)}
                   />
                 )}
               </div>
@@ -2982,6 +3415,312 @@ function ChatPage() {
           />
         )}
       </main>
+
+      <aside
+        className={`h-full shrink-0 overflow-hidden border-l border-slate-800/70 bg-[#1f242b] transition-[width,opacity] duration-300 ease-out ${
+          infoPanelOpen && (selectedUser || selectedGroup)
+            ? "w-[380px] opacity-100"
+            : "w-0 opacity-0"
+        }`}
+      >
+        <div className="w-[380px] h-full flex flex-col text-slate-100">
+          <div className="h-[92px] px-5 border-b border-slate-800 flex items-center justify-between">
+            <h3 className="text-xl font-bold">Thông tin hội thoại</h3>
+            <button
+              type="button"
+              onClick={() => setInfoPanelOpen(false)}
+              className="w-9 h-9 rounded-full text-slate-400 hover:text-white hover:bg-white/10 transition"
+              title="Đóng"
+            >
+              ×
+            </button>
+          </div>
+
+          <div className="flex-1 overflow-y-auto">
+            <section className="px-6 py-7 text-center bg-[#22272e]">
+              <img
+                src={currentAvatar || DEFAULT_AVATAR}
+                alt=""
+                className="w-20 h-20 rounded-full object-cover mx-auto bg-slate-700 border-2 border-slate-600"
+                onError={(e) => {
+                  e.currentTarget.src = DEFAULT_AVATAR;
+                }}
+              />
+
+              <div className="mt-4 flex items-center justify-center gap-2">
+                <h4 className="text-xl font-bold truncate max-w-[250px]">
+                  {currentTitle}
+                </h4>
+
+                {!selectedGroup && selectedUser && (
+                  <button
+                    type="button"
+                    onClick={() => setShowNicknameModal(true)}
+                    className="w-8 h-8 rounded-full bg-slate-700 hover:bg-slate-600 text-slate-200 transition"
+                    title="Đổi biệt danh"
+                  >
+                    ✎
+                  </button>
+                )}
+              </div>
+
+              <div className="mt-6 grid grid-cols-3 gap-3">
+                <button
+                  type="button"
+                  onClick={handleToggleMuteConversation}
+                  className="flex flex-col items-center gap-2 text-sm text-slate-200"
+                >
+                  <span
+                    className={`w-11 h-11 rounded-full flex items-center justify-center text-xl ${
+                      isCurrentConversationMuted
+                        ? "bg-amber-500/20 text-amber-300"
+                        : "bg-slate-700"
+                    }`}
+                  >
+                    🔕
+                  </span>
+                  Tắt thông báo
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowMessageSearch(true);
+                    setInfoPanelOpen(false);
+                  }}
+                  className="flex flex-col items-center gap-2 text-sm text-slate-200"
+                >
+                  <span className="w-11 h-11 rounded-full bg-slate-700 flex items-center justify-center text-xl">
+                    🔍
+                  </span>
+                  Tìm tin
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleTogglePinConversation}
+                  className="flex flex-col items-center gap-2 text-sm text-slate-200"
+                >
+                  <span
+                    className={`w-11 h-11 rounded-full flex items-center justify-center text-xl ${
+                      isCurrentConversationPinned
+                        ? "bg-blue-500/20 text-blue-300"
+                        : "bg-slate-700"
+                    }`}
+                  >
+                    📌
+                  </span>
+                  Ghim hội thoại
+                </button>
+              </div>
+            </section>
+
+            <section className="border-t border-slate-900 bg-[#1f242b]">
+              <div className="px-5 py-4 flex items-center justify-between">
+                <h4 className="text-lg font-bold">Ảnh/Video</h4>
+                <span className="text-slate-400">⌄</span>
+              </div>
+
+              {sharedMediaMessages.length > 0 ? (
+                <div className="px-5 pb-5 grid grid-cols-3 gap-2">
+                  {sharedMediaMessages.slice(0, 6).map((msg, index) => (
+                    <a
+                      key={msg.id || msg._id || index}
+                      href={resolveChatAsset(msg.fileUrl)}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="aspect-square rounded-md overflow-hidden bg-slate-800 border border-slate-700"
+                    >
+                      <img
+                        src={resolveChatAsset(msg.fileUrl)}
+                        alt=""
+                        className="w-full h-full object-cover"
+                      />
+                    </a>
+                  ))}
+                </div>
+              ) : (
+                <div className="px-5 pb-5 text-sm text-slate-500">
+                  Chưa có ảnh hoặc video
+                </div>
+              )}
+            </section>
+
+            <section className="border-t border-slate-900 bg-[#1f242b]">
+              <div className="px-5 py-4 flex items-center justify-between">
+                <h4 className="text-lg font-bold">File</h4>
+                <span className="text-slate-400">⌄</span>
+              </div>
+
+              <div className="px-5 pb-5 space-y-3">
+                {sharedFileMessages.length > 0 ? (
+                  sharedFileMessages.slice(0, 4).map((msg, index) => {
+                    const fileName = String(msg.fileUrl || "")
+                      .split("/")
+                      .pop();
+
+                    return (
+                      <a
+                        key={msg.id || msg._id || index}
+                        href={resolveChatAsset(msg.fileUrl)}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="flex items-center gap-3 rounded-lg hover:bg-white/5 py-2"
+                      >
+                        <span className="w-11 h-11 rounded-lg bg-blue-500 text-white flex items-center justify-center font-bold">
+                          {String(fileName || "F").split(".").pop()?.slice(0, 3).toUpperCase()}
+                        </span>
+                        <div className="min-w-0 flex-1 text-left">
+                          <div className="font-semibold truncate">
+                            {fileName || "Tệp đính kèm"}
+                          </div>
+                          <div className="text-xs text-slate-400">
+                            {msg.createdAt
+                              ? new Date(msg.createdAt).toLocaleDateString("vi-VN")
+                              : ""}
+                          </div>
+                        </div>
+                      </a>
+                    );
+                  })
+                ) : (
+                  <div className="text-sm text-slate-500">Chưa có file</div>
+                )}
+              </div>
+            </section>
+
+            <section className="border-t border-slate-900 bg-[#1f242b]">
+              <div className="px-5 py-4 flex items-center justify-between">
+                <h4 className="text-lg font-bold">Link</h4>
+                <span className="text-slate-400">⌄</span>
+              </div>
+
+              <div className="px-5 pb-5 space-y-3">
+                {sharedLinks.length > 0 ? (
+                  sharedLinks.slice(0, 3).map((link) => (
+                    <a
+                      key={link.id}
+                      href={link.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="flex items-center gap-3 rounded-lg hover:bg-white/5 py-2"
+                    >
+                      <span className="w-11 h-11 rounded-lg border border-slate-700 flex items-center justify-center text-xl">
+                        🔗
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <div className="font-semibold truncate">{link.url}</div>
+                        <div className="text-xs text-blue-400 truncate">
+                          {link.url.replace(/^https?:\/\//, "")}
+                        </div>
+                      </div>
+                    </a>
+                  ))
+                ) : (
+                  <div className="text-sm text-slate-500">Chưa có link</div>
+                )}
+              </div>
+            </section>
+
+            <section className="border-t border-slate-900 bg-[#1f242b]">
+              <div className="px-5 py-4 flex items-center justify-between">
+                <h4 className="text-lg font-bold">Thiết lập</h4>
+                <span className="text-slate-400">⌄</span>
+              </div>
+
+              <div className="px-5 pb-5 space-y-1">
+                <div className="py-3 flex items-center justify-between gap-4">
+                  <div>
+                    <div className="font-semibold">Áp dụng nền cho cả đoạn chat</div>
+                    <div className="text-xs text-slate-400 mt-1">
+                      Tắt: chỉ mình bạn thấy · Bật: người còn lại hoặc nhóm cùng thấy
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setBackgroundShared((prev) => !prev)}
+                    className={`w-12 h-7 rounded-full p-1 shrink-0 transition ${
+                      backgroundShared ? "bg-blue-500" : "bg-slate-600"
+                    }`}
+                  >
+                    <span
+                      className={`block w-5 h-5 rounded-full bg-white transition ${
+                        backgroundShared ? "translate-x-5" : "translate-x-0"
+                      }`}
+                    />
+                  </button>
+                </div>
+
+                <label className="flex items-center gap-3 px-1 py-3 rounded-lg hover:bg-white/5 cursor-pointer">
+                  <span className="w-10 h-10 rounded-full bg-slate-700 flex items-center justify-center text-xl">
+                    🖼️
+                  </span>
+                  <span className="font-semibold">Đổi nền đoạn chat</span>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={handleChangeChatBackground}
+                  />
+                </label>
+
+                {!selectedGroup && selectedUser && (
+                  <button
+                    type="button"
+                    onClick={handleToggleBlockUser}
+                    className={`w-full flex items-center gap-3 px-1 py-3 rounded-lg hover:bg-white/5 text-left ${
+                      blockStatus.blockedByMe
+                        ? "text-emerald-400"
+                        : "text-amber-400"
+                    }`}
+                  >
+                    <span className="w-10 h-10 rounded-full bg-slate-700 flex items-center justify-center text-xl">
+                      {blockStatus.blockedByMe ? "🔓" : "🚫"}
+                    </span>
+                    <span className="font-semibold">
+                      {blockStatus.blockedByMe
+                        ? "Bỏ chặn người dùng"
+                        : "Chặn người dùng"}
+                    </span>
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  onClick={async () => {
+                    await handleDeleteConversation();
+                    setInfoPanelOpen(false);
+                  }}
+                  className="w-full flex items-center gap-3 px-1 py-3 rounded-lg hover:bg-red-500/10 text-left text-red-400"
+                >
+                  <span className="w-10 h-10 rounded-full bg-red-500/10 flex items-center justify-center text-xl">
+                    🗑️
+                  </span>
+                  <span className="font-semibold">Xóa hội thoại</span>
+                </button>
+              </div>
+            </section>
+          </div>
+        </div>
+      </aside>
+
+      {!aiAssistantOpen && (
+        <button
+          type="button"
+          onClick={() => setAiAssistantOpen(true)}
+          className="fixed right-6 bottom-6 z-[1100] h-14 px-5 rounded-full bg-emerald-600 hover:bg-emerald-500 text-white shadow-2xl flex items-center gap-2 font-semibold transition"
+          title="Mở AI Chatbox"
+        >
+          <span className="text-xl">✨</span>
+          AI
+        </button>
+      )}
+
+      <AiAssistantBox
+        open={aiAssistantOpen}
+        onClose={() => setAiAssistantOpen(false)}
+        onAsk={handleAskAiAssistant}
+      />
 
       {showForwardModal && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[999]">
@@ -3331,7 +4070,7 @@ function ChatPage() {
               <div className="h-2 bg-slate-100" />
 
               {/* ACTIONS */}
-              <div className="py-2 bg-white">
+              <div className="hidden">
                 <button
                   type="button"
                   onClick={() => {

@@ -42,3 +42,8 @@ export const uploadChatFileApi = async (file: {
 
   return res.data;
 };
+
+export const suggestMessageByAiApi = async (message: string) => {
+  const res = await axiosClient.post("/chat/ai/suggestions", { message });
+  return res.data;
+};

@@ -90,12 +90,14 @@ export const buildPayload = ({
   content,
   type,
   fileUrl,
+  replyTo,
 }: {
   currentUserId: number | string;
   roomId: string;
   content: string | null;
   type: string;
   fileUrl: string | null;
+  replyTo?: any;
 }) => {
   const receiverId = getReceiverIdFromRoom(roomId, currentUserId);
 
@@ -106,8 +108,13 @@ export const buildPayload = ({
     content,
     type,
     fileUrl,
-    originalSenderId: null,
-    originalContent: null,
-    originalMessageId: null,
+    originalSenderId:
+      replyTo?.senderId != null ? Number(replyTo.senderId) : null,
+    originalContent:
+      replyTo?.content ||
+      replyTo?.text ||
+      replyTo?.originalContent ||
+      (replyTo?.fileUrl ? "Tệp đính kèm" : null),
+    originalMessageId: replyTo?.id ? String(replyTo.id) : null,
   };
 };

@@ -20,6 +20,8 @@ const ChatBox = memo(
     messagesEndRef,
     currentUserId,
     onForwardMessage,
+    onReplyMessage,
+    onOpenUserProfile,
     onReactMessage,
     onPinMessage,
     onUnpinMessage,
@@ -410,6 +412,45 @@ const ChatBox = memo(
       return String(url || "").match(/\.pdf(\?|$)/i);
     };
 
+    const messageById = useMemo(() => {
+      const map = new Map();
+      visibleMessages.forEach((message) => {
+        const id = message?._id || message?.id;
+        if (id) map.set(String(id), message);
+      });
+      return map;
+    }, [visibleMessages]);
+
+    const getReplyPreview = (msg) => {
+      if (!msg?.originalMessageId && !msg?.originalContent) return null;
+
+      const original = messageById.get(String(msg.originalMessageId || ""));
+      const content =
+        msg.originalContent ||
+        original?.content ||
+        original?.text ||
+        (original?.fileUrl ? "Tệp đính kèm" : "Tin nhắn");
+      const senderName =
+        original?.senderName ||
+        original?.sender?.username ||
+        (Number(msg.originalSenderId) === Number(currentUserId)
+          ? "Bạn"
+          : "Tin nhắn");
+
+      return { content, senderName };
+    };
+
+    const buildReplyTarget = (msg, senderName) => ({
+      id: msg?._id || msg?.id,
+      senderId: msg?.senderId || msg?.sender?._id || msg?.sender || msg?.userId,
+      senderName,
+      content:
+        msg?.content ||
+        msg?.text ||
+        msg?.originalContent ||
+        (msg?.fileUrl ? "Tệp đính kèm" : "Tin nhắn"),
+    });
+
     // ================= RENDER =================
     return (
       <div className="h-full w-full relative overflow-hidden bg-[#0f172a]">
@@ -443,11 +484,11 @@ const ChatBox = memo(
           onScroll={(e) => {
             previousScrollTopRef.current = e.currentTarget.scrollTop;
           }}
-          className="relative z-10 h-full overflow-y-auto p-4 pt-16"
+          className="relative z-10 h-full overflow-y-auto p-4 pt-4"
         >
           <div className="space-y-4 min-h-full">
             {showSearch && (
-              <div className="sticky top-0 z-30 bg-[#0f172a]/95 backdrop-blur-sm pb-3">
+              <div className="sticky top-0 z-30 -mx-4 -mt-4 mb-3 border-b border-slate-700/70 bg-[#111827]/95 px-5 py-3 shadow-xl backdrop-blur-sm">
                 <div className="flex items-center gap-2">
                   <input
                     value={searchKeyword}
@@ -534,6 +575,8 @@ const ChatBox = memo(
                 const senderAvatar =
                   msg.senderAvatar || msg.sender?.avatar || msg.avatar || null;
 
+                const replyPreview = getReplyPreview(msg);
+
                 return (
                   <div
                     id={`msg-${messageId}`}
@@ -566,9 +609,28 @@ const ChatBox = memo(
                       {/* AVATAR NGƯỜI GỬI */}
                       {showSenderAvatar && (
                         <div
+                          role="button"
+                          tabIndex={0}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onOpenUserProfile?.({
+                              id: senderId,
+                              username: senderName,
+                              avatar: senderAvatar,
+                            });
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              onOpenUserProfile?.({
+                                id: senderId,
+                                username: senderName,
+                                avatar: senderAvatar,
+                              });
+                            }
+                          }}
                           className={`w-8 h-8 rounded-full overflow-hidden bg-slate-600 flex-shrink-0 ${
                             showSenderName ? "mt-5" : "mt-1"
-                          }`}
+                          } cursor-pointer hover:ring-2 hover:ring-blue-400 transition`}
                         >
                           {senderAvatar ? (
                             <img
@@ -630,6 +692,23 @@ const ChatBox = memo(
                             {isBot && (
                               <div className="text-[10px] uppercase tracking-wide text-emerald-400/90 mb-1 font-medium">
                                 Trợ lý AI
+                              </div>
+                            )}
+
+                            {!msg.isRecalled && replyPreview && (
+                              <div
+                                className={`mb-2 rounded-lg border-l-4 px-3 py-2 ${
+                                  isMe
+                                    ? "bg-indigo-900/35 border-blue-300"
+                                    : "bg-slate-900/45 border-blue-400"
+                                }`}
+                              >
+                                <div className="text-[13px] font-semibold text-slate-100 truncate">
+                                  {replyPreview.senderName}
+                                </div>
+                                <div className="text-[13px] text-slate-300 line-clamp-2 break-words">
+                                  {replyPreview.content}
+                                </div>
                               </div>
                             )}
 
@@ -879,6 +958,20 @@ const ChatBox = memo(
                                 </div>
 
                                 {/* CHUYỂN TIẾP NHANH */}
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    onReplyMessage?.(
+                                      buildReplyTarget(msg, senderName)
+                                    );
+                                  }}
+                                  className="w-9 h-9 rounded-full bg-white text-blue-600 shadow-md border border-slate-200 flex items-center justify-center hover:bg-slate-50"
+                                  title="Trả lời"
+                                >
+                                  ”
+                                </button>
+
                                 <button
                                   type="button"
                                   onClick={(e) => {

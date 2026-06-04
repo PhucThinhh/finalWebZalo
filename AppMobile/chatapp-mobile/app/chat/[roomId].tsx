@@ -18,6 +18,7 @@ import * as DocumentPicker from "expo-document-picker";
 
 import {
   getMessagesByRoomApi,
+  suggestMessageByAiApi,
   uploadChatFileApi,
 } from "../../src/features/chat/api/chatApi";
 import { getMeApi } from "../../src/features/contacts/api/contactsApi";
@@ -54,7 +55,10 @@ export default function ChatRoomScreen() {
   const [messages, setMessages] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [text, setText] = useState("");
-  const [aiMode, setAiMode] = useState(false);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiSuggestions, setAiSuggestions] = useState<string[]>([]);
+  const [aiError, setAiError] = useState("");
+  const [replyMessage, setReplyMessage] = useState<any>(null);
   const [uploading, setUploading] = useState(false);
   const [isBlocked, setIsBlocked] = useState(false);
 
@@ -164,6 +168,43 @@ export default function ChatRoomScreen() {
     }
   };
 
+  const handleSuggestWithAi = async () => {
+    const content = text.trim();
+    if (!content) {
+      setAiError("Nhập tin nhắn trước rồi bấm AI để gợi ý.");
+      setAiSuggestions([]);
+      return;
+    }
+
+    try {
+      setAiLoading(true);
+      setAiError("");
+      const data = await suggestMessageByAiApi(content);
+      const suggestions = Array.isArray(data?.suggestions)
+        ? data.suggestions
+        : [];
+
+      setAiSuggestions(suggestions);
+      if (suggestions.length === 0) {
+        setAiError("AI chưa tạo được gợi ý phù hợp.");
+      }
+    } catch (error: any) {
+      console.log("suggest AI error:", error);
+      console.log("suggest AI response:", error?.response?.data);
+      setAiSuggestions([
+        `Mình muốn nói là ${content}`,
+        `Ý mình là ${content}`,
+        `Nói cách khác, ${content}`,
+        `Mình diễn đạt lại một chút: ${content}`,
+      ]);
+      setAiError(
+        "Backend AI chưa sẵn sàng. Đang hiển thị gợi ý tạm, hãy restart backend để dùng Gemini thật."
+      );
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
   const handleSend = () => {
     let content = text.trim();
     if (!content || !currentUserId || !roomId) return;
@@ -173,21 +214,21 @@ export default function ChatRoomScreen() {
       return;
     }
 
-    if (aiMode && !content.startsWith("/ai")) {
-      content = `/ai ${content}`;
-    }
-
     const payload = buildPayload({
       currentUserId,
       roomId: String(roomId),
       content,
       type: "TEXT",
       fileUrl: null,
+      replyTo: replyMessage,
     });
 
     const sent = sendSocketMessage(payload);
     if (sent) {
       setText("");
+      setAiSuggestions([]);
+      setAiError("");
+      setReplyMessage(null);
     }
   };
 
@@ -235,6 +276,7 @@ export default function ChatRoomScreen() {
         content: null,
         type: "FILE",
         fileUrl,
+        replyTo: replyMessage,
       });
 
       const sent = sendSocketMessage(payload);
@@ -288,6 +330,7 @@ export default function ChatRoomScreen() {
         content: file.name || "Tệp đính kèm",
         type: "FILE",
         fileUrl,
+        replyTo: replyMessage,
       });
 
       const sent = sendSocketMessage(payload);
@@ -344,6 +387,16 @@ export default function ChatRoomScreen() {
                 isMine={String(item?.senderId) === String(currentUserId)}
                 isBot={String(item?.senderId) === "0"}
                 onRecalled={loadMessages}
+                onReply={(message) =>
+                  setReplyMessage({
+                    ...message,
+                    content:
+                      message?.content ||
+                      message?.text ||
+                      message?.originalContent ||
+                      (message?.fileUrl ? "Tệp đính kèm" : "Tin nhắn"),
+                  })
+                }
               />
             )}
             contentContainerStyle={styles.listContent}
@@ -361,8 +414,21 @@ export default function ChatRoomScreen() {
           onPickFile={handlePickFile}
           onSend={handleSend}
           disabled={isBlocked}
-          aiMode={aiMode}
-          onToggleAiMode={() => setAiMode((v) => !v)}
+          aiLoading={aiLoading}
+          aiSuggestions={aiSuggestions}
+          aiError={aiError}
+          onSuggestAi={handleSuggestWithAi}
+          onSelectAiSuggestion={(value) => {
+            setText(value);
+            setAiSuggestions([]);
+            setAiError("");
+          }}
+          onCloseAiSuggestions={() => {
+            setAiSuggestions([]);
+            setAiError("");
+          }}
+          replyToMessage={replyMessage}
+          onCancelReply={() => setReplyMessage(null)}
         />
       </KeyboardAvoidingView>
     </SafeAreaView>
