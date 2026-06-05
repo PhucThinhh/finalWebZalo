@@ -5,6 +5,21 @@ export const getMessagesByRoomApi = async (roomId: string | number) => {
   return res.data;
 };
 
+export const getPinnedMessagesApi = async (roomId: string | number) => {
+  const res = await axiosClient.get(`/chat/messages/${roomId}/pinned`);
+  return res.data;
+};
+
+export const pinMessageApi = async (messageId: string | number) => {
+  const res = await axiosClient.put(`/chat/message/pin/${messageId}`);
+  return res.data;
+};
+
+export const unpinMessageApi = async (messageId: string | number) => {
+  const res = await axiosClient.put(`/chat/message/unpin/${messageId}`);
+  return res.data;
+};
+
 export const recallMessageApi = async (messageId: string | number) => {
   const res = await axiosClient.put(`/chat/message/recall/${messageId}`);
   return res.data;

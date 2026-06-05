@@ -1,15 +1,14 @@
 package com.chatapp.service;
 
 import com.chatapp.dto.SendMessageDTO;
+import com.chatapp.entity.ConversationState;
 import com.chatapp.entity.Message;
 import com.chatapp.repository.ConversationStateRepository;
 import com.chatapp.repository.GroupMemberRepository;
 import com.chatapp.repository.MessageRepository;
 import lombok.RequiredArgsConstructor;
-import org.springframework.stereotype.Service;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
-
-import com.chatapp.entity.ConversationState;
+import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -31,18 +30,35 @@ public class ChatService {
     // =========================
     public Message sendMessage(SendMessageDTO dto) {
 
-        // 🔥 CHẶN NGAY
-        if (blockedService.isEitherBlocked(dto.getSenderId(), dto.getReceiverId())) {
-            System.out.println("🚫 BLOCKED MESSAGE");
-            return null;
+        if (dto == null) {
+            throw new RuntimeException("Dữ liệu tin nhắn không hợp lệ");
+        }
+
+        if (dto.getSenderId() == null) {
+            throw new RuntimeException("Thiếu senderId");
+        }
+
+        if (dto.getRoomId() == null || dto.getRoomId().isBlank()) {
+            throw new RuntimeException("Thiếu roomId");
         }
 
         String roomId;
+        String groupId = null;
 
-        if (dto.getRoomId() != null && dto.getRoomId().startsWith("group_")) {
+        boolean isGroupMessage =
+                Boolean.TRUE.equals(dto.getIsGroup())
+                        || dto.getGroupId() != null
+                        || isGroupRoomId(dto.getRoomId());
 
-            roomId = dto.getRoomId();
-            String groupId = roomId.replace("group_", "");
+        if (isGroupMessage) {
+
+            groupId = resolveGroupId(dto);
+
+            if (groupId == null || groupId.isBlank()) {
+                throw new RuntimeException("Thiếu groupId");
+            }
+
+            roomId = groupId;
 
             boolean isMember = memberRepo
                     .existsByGroupIdAndUserId(groupId, dto.getSenderId());
@@ -52,35 +68,53 @@ public class ChatService {
             }
 
         } else {
+
+            if (dto.getReceiverId() == null) {
+                throw new RuntimeException("Thiếu receiverId");
+            }
+
+            if (blockedService.isEitherBlocked(dto.getSenderId(), dto.getReceiverId())) {
+                System.out.println("🚫 BLOCKED MESSAGE");
+                return null;
+            }
+
             roomId = generateRoomId(dto.getSenderId(), dto.getReceiverId());
         }
 
-        // 🔥 SAVE USER MESSAGE
+        String type = dto.getType();
+        if (type == null || type.isBlank()) {
+            type = "TEXT";
+        }
+
         Message message = Message.builder()
                 .senderId(dto.getSenderId())
-                .receiverId(dto.getReceiverId())
+                .receiverId(isGroupMessage ? null : dto.getReceiverId())
                 .roomId(roomId)
+                .groupId(isGroupMessage ? groupId : null)
+                .isGroup(isGroupMessage)
                 .content(dto.getContent())
-                .type(dto.getType())
+                .type(type)
                 .fileUrl(dto.getFileUrl())
+                .originalSenderId(dto.getOriginalSenderId())
+                .originalContent(dto.getOriginalContent())
+                .originalMessageId(dto.getOriginalMessageId())
                 .isDeleted(false)
                 .isRecalled(false)
+                .isPinned(false)
                 .createdAt(LocalDateTime.now())
                 .build();
 
         Message saved = messageRepository.save(message);
 
-        // 🔥 GỬI REALTIME USER
         messagingTemplate.convertAndSend(
                 "/topic/chat/" + roomId,
                 saved
         );
 
-        // =========================
-        // 🤖 AI: tin nhắn bắt đầu bằng "/ai" → gọi AIService, bot senderId = 0
-        // =========================
         String textContent = dto.getContent() != null ? dto.getContent().trim() : "";
+
         if (textContent.startsWith("/ai")) {
+
             String question = textContent.length() > 3
                     ? textContent.substring(3).trim()
                     : "";
@@ -93,17 +127,23 @@ public class ChatService {
 
             Message botMsg = Message.builder()
                     .senderId(0L)
+                    .receiverId(isGroupMessage ? null : dto.getReceiverId())
                     .roomId(roomId)
+                    .groupId(isGroupMessage ? groupId : null)
+                    .isGroup(isGroupMessage)
                     .content(aiReply)
                     .type("TEXT")
+                    .isDeleted(false)
+                    .isRecalled(false)
+                    .isPinned(false)
                     .createdAt(LocalDateTime.now())
                     .build();
 
-            messageRepository.save(botMsg);
+            Message savedBot = messageRepository.save(botMsg);
 
             messagingTemplate.convertAndSend(
                     "/topic/chat/" + roomId,
-                    botMsg
+                    savedBot
             );
         }
 
@@ -115,6 +155,8 @@ public class ChatService {
     // =========================
     public List<Message> getMessages(String roomId, Long userId) {
 
+        validateRoomAccess(roomId, userId);
+
         ConversationState state = conversationRepository
                 .findByConversationKeyAndUserId(roomId, userId)
                 .orElse(null);
@@ -124,7 +166,11 @@ public class ChatService {
 
         if (state != null && Boolean.TRUE.equals(state.getIsDeleted())) {
             return messages.stream()
-                    .filter(m -> m.getCreatedAt().isAfter(state.getDeletedAt()))
+                    .filter(m ->
+                            m.getCreatedAt() != null
+                                    && state.getDeletedAt() != null
+                                    && m.getCreatedAt().isAfter(state.getDeletedAt())
+                    )
                     .toList();
         }
 
@@ -132,21 +178,96 @@ public class ChatService {
     }
 
     // =========================
-    // XOÁ 1 CHIỀU (DELETE FOR ME)
+    // GET PINNED MESSAGES
+    // =========================
+    public List<Message> getPinnedMessages(String roomId, Long userId) {
+
+        validateRoomAccess(roomId, userId);
+
+        return messageRepository.findByRoomIdAndIsPinnedTrueOrderByPinnedAtDesc(roomId);
+    }
+
+    // =========================
+    // PIN MESSAGE
+    // =========================
+    public Message pinMessage(String messageId, Long userId) {
+
+        if (messageId == null || messageId.isBlank()) {
+            throw new RuntimeException("Thiếu messageId");
+        }
+
+        Message msg = messageRepository.findById(messageId)
+                .orElseThrow(() -> new RuntimeException("Message not found"));
+
+        validateRoomAccess(msg.getRoomId(), userId);
+
+        if (Boolean.TRUE.equals(msg.getIsRecalled())) {
+            throw new RuntimeException("Không thể ghim tin nhắn đã thu hồi");
+        }
+
+        if (Boolean.TRUE.equals(msg.getIsDeleted())) {
+            throw new RuntimeException("Không thể ghim tin nhắn đã xóa");
+        }
+
+        msg.setIsPinned(true);
+        msg.setPinnedAt(LocalDateTime.now());
+        msg.setPinnedBy(userId);
+
+        Message saved = messageRepository.save(msg);
+
+        messagingTemplate.convertAndSend(
+                "/topic/chat/" + msg.getRoomId() + "/pin",
+                saved
+        );
+
+        return saved;
+    }
+
+    // =========================
+    // UNPIN MESSAGE
+    // =========================
+    public Message unpinMessage(String messageId, Long userId) {
+
+        if (messageId == null || messageId.isBlank()) {
+            throw new RuntimeException("Thiếu messageId");
+        }
+
+        Message msg = messageRepository.findById(messageId)
+                .orElseThrow(() -> new RuntimeException("Message not found"));
+
+        validateRoomAccess(msg.getRoomId(), userId);
+
+        msg.setIsPinned(false);
+        msg.setPinnedAt(null);
+        msg.setPinnedBy(null);
+
+        Message saved = messageRepository.save(msg);
+
+        messagingTemplate.convertAndSend(
+                "/topic/chat/" + msg.getRoomId() + "/pin",
+                saved
+        );
+
+        return saved;
+    }
+
+    // =========================
+    // XOÁ 1 CHIỀU
     // =========================
     public Message deleteForMe(String messageId, Long userId) {
 
         Message msg = messageRepository.findById(messageId)
                 .orElseThrow(() -> new RuntimeException("Message not found"));
 
+        validateRoomAccess(msg.getRoomId(), userId);
+
         msg.setDeletedBy(userId);
 
-        // ❌ KHÔNG GỬI SOCKET Ở ĐÂY
         return messageRepository.save(msg);
     }
 
     // =========================
-    // THU HỒI (DELETE FOR EVERYONE)
+    // THU HỒI
     // =========================
     public Message recallMessage(String messageId) {
 
@@ -156,23 +277,33 @@ public class ChatService {
         msg.setIsRecalled(true);
         msg.setContent(null);
 
+        if (Boolean.TRUE.equals(msg.getIsPinned())) {
+            msg.setIsPinned(false);
+            msg.setPinnedAt(null);
+            msg.setPinnedBy(null);
+        }
+
         Message saved = messageRepository.save(msg);
 
-        // ✅ gửi realtime cho cả 2 bên (GIỮ NGUYÊN)
         messagingTemplate.convertAndSend(
                 "/topic/chat/" + msg.getRoomId() + "/recall",
                 msg.getId()
+        );
+
+        messagingTemplate.convertAndSend(
+                "/topic/chat/" + msg.getRoomId() + "/pin",
+                saved
         );
 
         return saved;
     }
 
     // =========================
-    private String generateRoomId(Long a, Long b) {
-        return (a < b) ? a + "_" + b : b + "_" + a;
-    }
-
+    // XOÁ CUỘC TRÒ CHUYỆN 1 CHIỀU
+    // =========================
     public void deleteConversationForMe(String roomId, Long userId) {
+
+        validateRoomAccess(roomId, userId);
 
         ConversationState state = conversationRepository
                 .findByConversationKeyAndUserId(roomId, userId)
@@ -189,5 +320,72 @@ public class ChatService {
         state.setDeletedAt(LocalDateTime.now());
 
         conversationRepository.save(state);
+    }
+
+    // =========================
+    // HELPER
+    // =========================
+    private void validateRoomAccess(String roomId, Long userId) {
+
+        if (roomId == null || roomId.isBlank()) {
+            throw new RuntimeException("Thiếu roomId");
+        }
+
+        if (userId == null) {
+            throw new RuntimeException("Thiếu userId");
+        }
+
+        if (isGroupRoomId(roomId)) {
+            String groupId = roomId.startsWith("group_")
+                    ? roomId.replace("group_", "")
+                    : roomId;
+
+            boolean isMember = memberRepo.existsByGroupIdAndUserId(groupId, userId);
+
+            if (!isMember) {
+                throw new RuntimeException("Bạn không thuộc nhóm");
+            }
+        }
+    }
+
+    private String generateRoomId(Long a, Long b) {
+
+        if (a == null || b == null) {
+            throw new RuntimeException("Thiếu userId để tạo roomId");
+        }
+
+        return (a < b) ? a + "_" + b : b + "_" + a;
+    }
+
+    private String resolveGroupId(SendMessageDTO dto) {
+
+        if (dto.getGroupId() != null && !dto.getGroupId().isBlank()) {
+            return dto.getGroupId().startsWith("group_")
+                    ? dto.getGroupId().replace("group_", "")
+                    : dto.getGroupId();
+        }
+
+        if (dto.getRoomId() != null && dto.getRoomId().startsWith("group_")) {
+            return dto.getRoomId().replace("group_", "");
+        }
+
+        return dto.getRoomId();
+    }
+
+    private boolean isGroupRoomId(String roomId) {
+
+        if (roomId == null || roomId.isBlank()) {
+            return false;
+        }
+
+        if (roomId.matches("\\d+_\\d+")) {
+            return false;
+        }
+
+        if (roomId.startsWith("group_")) {
+            return true;
+        }
+
+        return true;
     }
 }

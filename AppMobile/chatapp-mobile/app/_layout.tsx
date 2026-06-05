@@ -1,16 +1,11 @@
-import {
-  DarkTheme,
-  DefaultTheme,
-  ThemeProvider,
-} from "@react-navigation/native";
+import { DarkTheme, DefaultTheme, ThemeProvider } from "@react-navigation/native";
 import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import "react-native-reanimated";
 
-import { useColorScheme } from "@/hooks/use-color-scheme";
-
-// 🔥 THÊM DÒNG NÀY
 import Toast from "react-native-toast-message";
+
+import { useColorScheme } from "@/hooks/use-color-scheme";
 
 export const unstable_settings = {
   anchor: "(tabs)",
@@ -21,29 +16,17 @@ export default function RootLayout() {
 
   return (
     <ThemeProvider value={colorScheme === "dark" ? DarkTheme : DefaultTheme}>
-      <>
-        <Stack screenOptions={{ headerShown: false }}>
-          <Stack.Screen name="(tabs)" />
+      <Stack screenOptions={{ headerShown: false }}>
+        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+        <Stack.Screen name="chat/[roomId]" options={{ headerShown: false }} />
+        <Stack.Screen name="profile-detail" options={{ headerShown: false }} />
+        <Stack.Screen name="profileInfo" options={{ headerShown: false }} />
+        <Stack.Screen name="changePassword" options={{ headerShown: false }} />
+        <Stack.Screen name="modal" options={{ presentation: "modal" }} />
+      </Stack>
 
-          <Stack.Screen
-            name="profile-detail"
-            options={{
-              headerShown: false,
-              animation: "slide_from_right",
-            }}
-          />
-
-          <Stack.Screen
-            name="modal"
-            options={{ presentation: "modal", title: "Modal" }}
-          />
-        </Stack>
-
-        {/* 🔥 QUAN TRỌNG: TOAST PHẢI Ở NGOÀI STACK */}
-        <Toast />
-      </>
-
-      <StatusBar style="light" />
+      <StatusBar style="auto" />
+      <Toast />
     </ThemeProvider>
   );
 }

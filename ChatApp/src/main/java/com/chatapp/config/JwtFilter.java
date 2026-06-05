@@ -25,10 +25,25 @@ public class JwtFilter extends OncePerRequestFilter {
     }
 
     @Override
-    protected void doFilterInternal(HttpServletRequest request,
-                                    HttpServletResponse response,
-                                    FilterChain filterChain)
-            throws ServletException, IOException {
+    protected void doFilterInternal(
+            HttpServletRequest request,
+            HttpServletResponse response,
+            FilterChain filterChain
+    ) throws ServletException, IOException {
+
+        String path = request.getRequestURI();
+
+        // Bỏ qua websocket và public API
+        if (
+                path.startsWith("/ws")
+                        || path.startsWith("/api/auth")
+                        || path.startsWith("/swagger-ui")
+                        || path.startsWith("/v3/api-docs")
+                        || path.startsWith("/uploads")
+        ) {
+            filterChain.doFilter(request, response);
+            return;
+        }
 
         String authHeader = request.getHeader("Authorization");
 
@@ -36,20 +51,17 @@ public class JwtFilter extends OncePerRequestFilter {
             filterChain.doFilter(request, response);
             return;
         }
-        if (request.getRequestURI().startsWith("/ws")) {
-            filterChain.doFilter(request, response);
-            return;
-        }
-
 
         String token = authHeader.substring(7);
 
         try {
             String subject = jwtService.extractSubject(token);
 
-            if (jwtService.validateToken(token, subject)
-                    && SecurityContextHolder.getContext().getAuthentication() == null) {
-
+            if (
+                    subject != null
+                            && jwtService.validateToken(token, subject)
+                            && SecurityContextHolder.getContext().getAuthentication() == null
+            ) {
                 String role = jwtService.extractRole(token);
 
                 List<SimpleGrantedAuthority> authorities =
@@ -62,17 +74,18 @@ public class JwtFilter extends OncePerRequestFilter {
                                 authorities
                         );
 
-                auth.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
+                auth.setDetails(
+                        new WebAuthenticationDetailsSource().buildDetails(request)
+                );
 
                 SecurityContextHolder.getContext().setAuthentication(auth);
             }
 
         } catch (Exception e) {
             System.out.println("JWT error: " + e.getMessage());
+            SecurityContextHolder.clearContext();
         }
 
         filterChain.doFilter(request, response);
     }
-
-
 }

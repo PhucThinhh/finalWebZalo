@@ -52,13 +52,18 @@ export default function ProfileScreen() {
 
   // 🔥 CALL API
   const fetchUser = async () => {
-    try {
-      const res = await getMeApi();
-      setUser(res.data);
-    } catch (err) {
-      console.log("Lỗi lấy user:", err);
-    }
-  };
+  try {
+    const res = await getMeApi();
+
+    console.log("getMeApi profile response:", JSON.stringify(res, null, 2));
+
+    setUser(res);
+  } catch (err: any) {
+    console.log("Lỗi lấy user:", err);
+    console.log("Lỗi lấy user status:", err?.response?.status);
+    console.log("Lỗi lấy user response:", err?.response?.data);
+  }
+};
 
   // 🔥 AUTO REFRESH KHI QUAY LẠI
   useFocusEffect(
@@ -108,13 +113,16 @@ export default function ProfileScreen() {
           onPress={() => router.push("/profile-detail")}
         >
           <Image
-            source={{
-              uri:
-                user?.avatar ||
-                "https://randomuser.me/api/portraits/men/32.jpg",
-            }}
-            style={styles.avatar}
-          />
+  source={{
+    uri:
+      user?.avatar ||
+      "https://randomuser.me/api/portraits/men/32.jpg",
+  }}
+  style={styles.avatar}
+  onError={(e) => {
+    console.log("Avatar load error:", e.nativeEvent);
+  }}
+/>
 
           <View style={styles.userInfo}>
             <Text style={styles.userName}>{user?.username || "User"}</Text>

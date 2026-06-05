@@ -9,23 +9,29 @@ import org.springframework.data.mongodb.core.mapping.Document;
 
 import java.time.LocalDateTime;
 
-@Document(collection = "chat_group")
+@Document(collection = "posts")
 @Data
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
-public class Group {
+public class Post {
 
     @Id
     private String id;
 
-    private String name;
+    private Long userId;
 
-    private Long createdBy;
+    private String username;
 
-    private LocalDateTime createdAt;
+    private String userAvatar;
 
-    private String backgroundUrl;
+    private String content;
 
-    private String avatarUrl;
+    private String imageUrl;
+
+    @Builder.Default
+    private Boolean isDeleted = false;
+
+    @Builder.Default
+    private LocalDateTime createdAt = LocalDateTime.now();
 }

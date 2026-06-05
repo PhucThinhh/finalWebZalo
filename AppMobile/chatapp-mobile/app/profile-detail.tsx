@@ -6,14 +6,17 @@ import {
   ActivityIndicator,
   Dimensions,
   Image,
+  Modal,
   Platform,
   ScrollView,
   StatusBar,
   StyleSheet,
   Text,
   TouchableOpacity,
-  View
+  View,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
+
 import {
   getMeApi,
   uploadAvatarApi,
@@ -21,38 +24,69 @@ import {
 } from "../src/features/user/api/userApi";
 
 type User = {
+  id?: number;
   username?: string;
-  avatar?: string;
-  coverImage?: string;
+  email?: string;
+  phone?: string;
+  gender?: string;
+  birthday?: string;
+  avatar?: string | null;
+  coverImage?: string | null;
 };
 
 const { width } = Dimensions.get("window");
-const STATUSBAR_HEIGHT =
-  StatusBar.currentHeight ?? (Platform.OS === "ios" ? 44 : 0);
+
+const DEFAULT_AVATAR =
+  "https://ui-avatars.com/api/?name=User&background=E5E7EB&color=111827";
+
+const DEFAULT_COVER =
+  "https://images.unsplash.com/photo-1506744038136-46273834b3fb";
 
 export default function ProfileDetail() {
   const router = useRouter();
-  const [user, setUser] = useState<User | null>(null);
-  const [avatar, setAvatar] = useState<string | null>(null);
-  const [cover, setCover] = useState<string | null>(null);
 
-  const [selectedImage, setSelectedImage] = useState<string | null>(null);
-  const [selectedCover, setSelectedCover] = useState<string | null>(null);
+  const [user, setUser] = useState<User | null>(null);
+  const [avatar, setAvatar] = useState<string>(DEFAULT_AVATAR);
+  const [cover, setCover] = useState<string>(DEFAULT_COVER);
+
+  const [selectedAvatar, setSelectedAvatar] =
+    useState<ImagePicker.ImagePickerAsset | null>(null);
+
+  const [selectedCover, setSelectedCover] =
+    useState<ImagePicker.ImagePickerAsset | null>(null);
+
   const [isUploading, setIsUploading] = useState(false);
-  
-  
-const [message, setMessage] = useState("");
-const [type, setType] = useState<"success" | "error" | "">("");
+  const [message, setMessage] = useState("");
+  const [type, setType] = useState<"success" | "error" | "">("");
+
+  const showToast = (toastType: "success" | "error", text: string) => {
+    setType(toastType);
+    setMessage(text);
+  };
+
+  const normalizeUser = (res: any) => {
+    return res?.data ?? res;
+  };
 
   const fetchUser = async () => {
     try {
       const res = await getMeApi();
-      const data = res.data;
+      const data = normalizeUser(res);
+
+      console.log(
+        "getMeApi profile-detail response:",
+        JSON.stringify(data, null, 2)
+      );
+
       setUser(data);
-      setAvatar(data.avatar);
-      setCover(data.coverImage);
-    } catch (err) {
+      setAvatar(data?.avatar || DEFAULT_AVATAR);
+      setCover(data?.coverImage || DEFAULT_COVER);
+    } catch (err: any) {
       console.log("Lỗi lấy user:", err);
+      console.log("Lỗi lấy user status:", err?.response?.status);
+      console.log("Lỗi lấy user response:", err?.response?.data);
+
+      showToast("error", "Không thể tải thông tin người dùng");
     }
   };
 
@@ -61,64 +95,95 @@ const [type, setType] = useState<"success" | "error" | "">("");
   }, []);
 
   useEffect(() => {
-    if (message) {
-      const timer = setTimeout(() => {
-        setMessage("");
-        setType("");
-      }, 2000); // 2 giây
+    if (!message) return;
 
-      return () => clearTimeout(timer);
-    }
+    const timer = setTimeout(() => {
+      setMessage("");
+      setType("");
+    }, 2200);
+
+    return () => clearTimeout(timer);
   }, [message]);
 
-  const pickImage = async (type: "avatar" | "cover") => {
-    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!permission.granted) {
-      setType("error");
-      setMessage("Cần quyền truy cập ảnh");
-      return;
-    }
+  const pickImage = async (target: "avatar" | "cover") => {
+    try {
+      const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
 
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ["images"],
-      allowsEditing: true,
-      aspect: type === "avatar" ? [1, 1] : [16, 9],
-      quality: 0.7,
-    });
+      if (!permission.granted) {
+        showToast("error", "Cần quyền truy cập ảnh");
+        return;
+      }
 
-    if (!result.canceled) {
-      if (type === "avatar") setSelectedImage(result.assets[0].uri);
-      else setSelectedCover(result.assets[0].uri);
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ["images"],
+        allowsEditing: true,
+        aspect: target === "avatar" ? [1, 1] : [16, 9],
+        quality: 0.8,
+      });
+
+      if (result.canceled) return;
+
+      const asset = result.assets?.[0];
+
+      if (!asset?.uri) return;
+
+      if (target === "avatar") {
+        setSelectedAvatar(asset);
+      } else {
+        setSelectedCover(asset);
+      }
+    } catch (err) {
+      console.log("pickImage error:", err);
+      showToast("error", "Không thể chọn ảnh");
     }
   };
 
-  const handleUpload = async (uri: string, type: "avatar" | "cover") => {
+  const handleUpload = async (asset: ImagePicker.ImagePickerAsset, target: "avatar" | "cover") => {
     setIsUploading(true);
+
     try {
-      const formData = new FormData();
-      formData.append("file", {
-        uri,
-        name: `${type}.jpg`,
-        type: "image/jpeg",
-      } as any);
+      const file = {
+        uri: asset.uri,
+        name:
+          asset.fileName ||
+          `${target}_${Date.now()}.${target === "avatar" ? "jpg" : "jpg"}`,
+        type: asset.mimeType || "image/jpeg",
+      };
 
       const res =
-        type === "avatar"
-          ? await uploadAvatarApi(formData)
-          : await uploadCoverApi(formData);
+        target === "avatar"
+          ? await uploadAvatarApi(file)
+          : await uploadCoverApi(file);
 
-      if (res.data) {
-        if (type === "avatar") setAvatar(res.data);
-        else setCover(res.data);
+      const updatedUser = normalizeUser(res);
+
+      console.log(
+        `${target} upload response:`,
+        JSON.stringify(updatedUser, null, 2)
+      );
+
+      setUser(updatedUser);
+
+      if (target === "avatar") {
+        setAvatar(updatedUser?.avatar || DEFAULT_AVATAR);
+        setSelectedAvatar(null);
+        showToast("success", "Đã cập nhật avatar 🎉");
+      } else {
+        setCover(updatedUser?.coverImage || DEFAULT_COVER);
+        setSelectedCover(null);
+        showToast("success", "Đã cập nhật ảnh bìa 🎉");
       }
-      fetchUser();
-      setSelectedImage(null);
-      setSelectedCover(null);
-      setType("success");
-      setMessage(`Đã cập nhật ${type === "avatar" ? "avatar" : "ảnh bìa"} 🎉`);
     } catch (err: any) {
-      setType("error");
-      setMessage(err?.response?.data?.message || "Không thể tải ảnh lên");
+      console.log("upload profile image error:", err);
+      console.log("upload profile image status:", err?.response?.status);
+      console.log("upload profile image response:", err?.response?.data);
+
+      showToast(
+        "error",
+        err?.response?.data?.message ||
+          err?.response?.data ||
+          "Không thể tải ảnh lên"
+      );
     } finally {
       setIsUploading(false);
     }
@@ -126,14 +191,22 @@ const [type, setType] = useState<"success" | "error" | "">("");
 
   if (!user) {
     return (
-      <View style={styles.loadingCenter}>
+      <SafeAreaView style={styles.loadingCenter}>
         <ActivityIndicator size="large" color="#007fff" />
-      </View>
+      </SafeAreaView>
     );
   }
 
   return (
-    <View style={styles.container}>
+    <SafeAreaView edges={["top"]} style={styles.container}>
+      <Stack.Screen options={{ headerShown: false }} />
+
+      <StatusBar
+        translucent
+        backgroundColor="transparent"
+        barStyle="light-content"
+      />
+
       {message !== "" && (
         <View
           style={[
@@ -144,31 +217,25 @@ const [type, setType] = useState<"success" | "error" | "">("");
           <Text style={styles.toastText}>{message}</Text>
         </View>
       )}
-      <Stack.Screen options={{ headerShown: false }} />
-      <StatusBar
-        translucent
-        backgroundColor="transparent"
-        barStyle="light-content"
-      />
 
       <ScrollView showsVerticalScrollIndicator={false} bounces={false}>
-        {/* SECTION 1: COVER & HEADER BUTTONS */}
         <View style={styles.coverSection}>
           <TouchableOpacity
             activeOpacity={0.9}
             onPress={() => pickImage("cover")}
           >
             <Image
-              source={{
-                uri:
-                  cover ||
-                  "https://images.unsplash.com/photo-1506744038136-46273834b3fb",
-              }}
+              source={{ uri: cover || DEFAULT_COVER }}
               style={styles.coverImage}
+              onError={(e) => {
+                console.log("Cover load error:", e.nativeEvent);
+                if (cover !== DEFAULT_COVER) {
+                  setCover(DEFAULT_COVER);
+                }
+              }}
             />
           </TouchableOpacity>
 
-          {/* Nút quay lại và Menu */}
           <View style={styles.headerButtons}>
             <TouchableOpacity
               onPress={() => router.back()}
@@ -176,10 +243,12 @@ const [type, setType] = useState<"success" | "error" | "">("");
             >
               <Ionicons name="arrow-back" size={24} color="#fff" />
             </TouchableOpacity>
+
             <View style={{ flexDirection: "row" }}>
               <TouchableOpacity style={styles.iconCircle}>
                 <Ionicons name="time-outline" size={24} color="#fff" />
               </TouchableOpacity>
+
               <TouchableOpacity style={[styles.iconCircle, { marginLeft: 15 }]}>
                 <Ionicons name="ellipsis-horizontal" size={24} color="#fff" />
               </TouchableOpacity>
@@ -187,25 +256,28 @@ const [type, setType] = useState<"success" | "error" | "">("");
           </View>
         </View>
 
-        {/* SECTION 2: AVATAR & INFO */}
         <View style={styles.profileInfoSection}>
           <View style={styles.avatarContainer}>
             <TouchableOpacity onPress={() => pickImage("avatar")}>
               <Image
-                source={{
-                  uri:
-                    avatar || "https://randomuser.me/api/portraits/men/32.jpg",
-                }}
+                source={{ uri: avatar || DEFAULT_AVATAR }}
                 style={styles.avatarImg}
+                onError={(e) => {
+                  console.log("Avatar load error:", e.nativeEvent);
+                  if (avatar !== DEFAULT_AVATAR) {
+                    setAvatar(DEFAULT_AVATAR);
+                  }
+                }}
               />
             </TouchableOpacity>
+
             <View style={styles.statusBadge}>
               <Text style={styles.statusText}>Trạng thái hiện tại</Text>
               <View style={styles.statusArrow} />
             </View>
           </View>
 
-          <Text style={styles.userNameText}>{user.username}</Text>
+          <Text style={styles.userNameText}>{user?.username || "User"}</Text>
 
           <TouchableOpacity
             style={styles.editBioBtn}
@@ -216,285 +288,470 @@ const [type, setType] = useState<"success" | "error" | "">("");
           </TouchableOpacity>
         </View>
 
-        {/* SECTION 3: QUICK ACTIONS */}
         <View style={styles.actionRow}>
           <TouchableOpacity style={styles.actionButton}>
-            <View style={styles.actionIconBg}>
+            <Ionicons name="image-outline" size={22} color="#1D9BF0" />
+            <Text style={styles.actionText}>Ảnh</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity style={styles.actionButton}>
+            <Ionicons name="people-outline" size={22} color="#1D9BF0" />
+            <Text style={styles.actionText}>Bạn bè</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity style={styles.actionButton}>
+            <Ionicons name="time-outline" size={22} color="#1D9BF0" />
+            <Text style={styles.actionText}>Nhật ký</Text>
+          </TouchableOpacity>
+        </View>
+
+        <View style={styles.infoCard}>
+          <Text style={styles.cardTitle}>Thông tin cá nhân</Text>
+
+          <View style={styles.infoRow}>
+            <Text style={styles.infoLabel}>Email</Text>
+            <Text style={styles.infoValue}>{user?.email || "Chưa có"}</Text>
+          </View>
+
+          <View style={styles.infoRow}>
+            <Text style={styles.infoLabel}>Số điện thoại</Text>
+            <Text style={styles.infoValue}>{user?.phone || "Chưa có"}</Text>
+          </View>
+
+          <View style={styles.infoRow}>
+            <Text style={styles.infoLabel}>Giới tính</Text>
+            <Text style={styles.infoValue}>{user?.gender || "Chưa có"}</Text>
+          </View>
+
+          <View style={styles.infoRow}>
+            <Text style={styles.infoLabel}>Ngày sinh</Text>
+            <Text style={styles.infoValue}>{user?.birthday || "Chưa có"}</Text>
+          </View>
+        </View>
+
+        <View style={styles.section}>
+          <MenuItem
+            icon={
               <MaterialCommunityIcons
-                name="face-recognition"
+                name="account-edit-outline"
                 size={22}
                 color="#00a3ff"
               />
-            </View>
-            <Text style={styles.actionText}>Cài zStyle</Text>
-          </TouchableOpacity>
+            }
+            title="Chỉnh sửa thông tin cá nhân"
+            onPress={() => router.push("/profileInfo")}
+          />
 
-          <TouchableOpacity style={styles.actionButton}>
-            <View style={styles.actionIconBg}>
-              <Ionicons name="images" size={20} color="#00a3ff" />
-            </View>
-            <Text style={styles.actionText}>Ảnh của tôi</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity style={styles.actionButton}>
-            <View style={styles.actionIconBg}>
-              <MaterialCommunityIcons
-                name="briefcase-variant"
-                size={20}
-                color="#00a3ff"
-              />
-            </View>
-            <Text style={styles.actionText}>Kho khoảnh khắc</Text>
-          </TouchableOpacity>
+          <MenuItem
+            icon={
+              <Ionicons name="lock-closed-outline" size={21} color="#00a3ff" />
+            }
+            title="Đổi mật khẩu"
+            onPress={() => router.push("/changePassword")}
+          />
         </View>
 
-        {/* SECTION 4: EMPTY LOG */}
-        <View style={styles.emptyDiarySection}>
-          <View style={styles.diaryIllustration}>
-            <Image
-              source={{
-                uri: "https://cdn-icons-png.flaticon.com/512/3514/3514491.png",
-              }}
-              style={styles.diaryImg}
-            />
-            <View style={styles.heartIcon}>
-              <Ionicons name="heart" size={16} color="#ff4d4d" />
-            </View>
-            <View style={styles.msgIcon}>
-              <Ionicons name="chatbubble" size={16} color="#4cd964" />
-            </View>
-          </View>
-          <Text style={styles.diaryTitle}>
-            Hôm nay {user.username} có gì vui?
-          </Text>
-          <Text style={styles.diarySub}>
-            Đây là Nhật ký của bạn - Hãy làm đầy Nhật ký với những dấu ấn cuộc
-            đời và kỷ niệm đáng nhớ nhé!
-          </Text>
-          <TouchableOpacity style={styles.postBtn}>
-            <Text style={styles.postBtnText}>Đăng lên Nhật ký</Text>
-          </TouchableOpacity>
-        </View>
+        <View style={{ height: 30 }} />
       </ScrollView>
 
-      {/* MODAL XÁC NHẬN (Dùng chung cho cả 2 loại ảnh) */}
-      {(selectedImage || selectedCover) && (
-        <View style={styles.confirmOverlay}>
-          <View style={styles.confirmBox}>
-            <Text style={styles.confirmTitle}>
-              Cập nhật {selectedImage ? "avatar" : "ảnh bìa"}?
-            </Text>
-            <Image
-              source={{ uri: (selectedImage || selectedCover) as string }}
-              style={selectedImage ? styles.previewAvatar : styles.previewCover}
-            />
-            <View style={styles.confirmActions}>
+      <Modal
+        visible={!!selectedAvatar}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setSelectedAvatar(null)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.previewBox}>
+            <Text style={styles.previewTitle}>Cập nhật avatar?</Text>
+
+            {selectedAvatar && (
+              <Image
+                source={{ uri: selectedAvatar.uri }}
+                style={styles.previewAvatar}
+              />
+            )}
+
+            <View style={styles.previewActions}>
               <TouchableOpacity
-                style={styles.btnCancel}
-                onPress={() => {
-                  setSelectedImage(null);
-                  setSelectedCover(null);
-                }}
+                style={styles.cancelBtn}
+                onPress={() => setSelectedAvatar(null)}
+                disabled={isUploading}
               >
-                <Text style={{ fontWeight: "600" }}>Hủy</Text>
+                <Text style={styles.cancelText}>Hủy</Text>
               </TouchableOpacity>
+
               <TouchableOpacity
-                style={styles.btnSave}
-                onPress={() =>
-                  handleUpload(
-                    (selectedImage || selectedCover)!,
-                    selectedImage ? "avatar" : "cover"
-                  )
-                }
+                style={styles.saveBtn}
+                onPress={() => {
+                  if (selectedAvatar) {
+                    handleUpload(selectedAvatar, "avatar");
+                  }
+                }}
+                disabled={isUploading}
               >
                 {isUploading ? (
                   <ActivityIndicator color="#fff" />
                 ) : (
-                  <Text style={{ color: "#fff", fontWeight: "600" }}>Lưu</Text>
+                  <Text style={styles.saveText}>Lưu</Text>
                 )}
               </TouchableOpacity>
             </View>
           </View>
         </View>
-      )}
-    </View>
+      </Modal>
+
+      <Modal
+        visible={!!selectedCover}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setSelectedCover(null)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.previewBox}>
+            <Text style={styles.previewTitle}>Cập nhật ảnh bìa?</Text>
+
+            {selectedCover && (
+              <Image
+                source={{ uri: selectedCover.uri }}
+                style={styles.previewCover}
+              />
+            )}
+
+            <View style={styles.previewActions}>
+              <TouchableOpacity
+                style={styles.cancelBtn}
+                onPress={() => setSelectedCover(null)}
+                disabled={isUploading}
+              >
+                <Text style={styles.cancelText}>Hủy</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.saveBtn}
+                onPress={() => {
+                  if (selectedCover) {
+                    handleUpload(selectedCover, "cover");
+                  }
+                }}
+                disabled={isUploading}
+              >
+                {isUploading ? (
+                  <ActivityIndicator color="#fff" />
+                ) : (
+                  <Text style={styles.saveText}>Lưu</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+    </SafeAreaView>
+  );
+}
+
+type MenuItemProps = {
+  icon: React.ReactNode;
+  title: string;
+  onPress?: () => void;
+};
+
+function MenuItem({ icon, title, onPress }: MenuItemProps) {
+  return (
+    <TouchableOpacity style={styles.menuItem} onPress={onPress}>
+      <View style={styles.menuIconContainer}>{icon}</View>
+      <Text style={styles.menuTitle}>{title}</Text>
+      <Feather name="chevron-right" size={18} color="#bbb" />
+    </TouchableOpacity>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#fff" },
-  loadingCenter: { flex: 1, justifyContent: "center", alignItems: "center" },
-
-  // Cover
-  coverSection: { height: 260, width: "100%" },
-  coverImage: { width: "100%", height: "100%", backgroundColor: "#eee" },
-  headerButtons: {
-    position: "absolute",
-    top: STATUSBAR_HEIGHT + 10,
-    left: 0,
-    right: 0,
-    flexDirection: "row",
-    justifyContent: "space-between",
-    paddingHorizontal: 15,
+  container: {
+    flex: 1,
+    backgroundColor: "#f1f2f4",
   },
-  iconCircle: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    backgroundColor: "rgba(0,0,0,0.3)",
+
+  loadingCenter: {
+    flex: 1,
+    backgroundColor: "#fff",
+    alignItems: "center",
     justifyContent: "center",
+  },
+
+  toast: {
+    position: "absolute",
+    top: 55,
+    left: 20,
+    right: 20,
+    zIndex: 9999,
+    borderRadius: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
     alignItems: "center",
   },
 
-  // Avatar & Info
-  profileInfoSection: { alignItems: "center", marginTop: -60 },
-  avatarContainer: { alignItems: "center" },
+  toastSuccess: {
+    backgroundColor: "#16A34A",
+  },
+
+  toastError: {
+    backgroundColor: "#DC2626",
+  },
+
+  toastText: {
+    color: "#fff",
+    fontWeight: "700",
+  },
+
+  coverSection: {
+    height: 250,
+    backgroundColor: "#ddd",
+  },
+
+  coverImage: {
+    width,
+    height: 250,
+    backgroundColor: "#ddd",
+  },
+
+  headerButtons: {
+    position: "absolute",
+    top: Platform.OS === "ios" ? 12 : 26,
+    left: 15,
+    right: 15,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+
+  iconCircle: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: "rgba(0,0,0,0.35)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  profileInfoSection: {
+    backgroundColor: "#fff",
+    alignItems: "center",
+    paddingBottom: 18,
+  },
+
+  avatarContainer: {
+    marginTop: -58,
+    alignItems: "center",
+  },
+
   avatarImg: {
-    width: 120,
-    height: 120,
-    borderRadius: 60,
+    width: 116,
+    height: 116,
+    borderRadius: 58,
     borderWidth: 4,
     borderColor: "#fff",
+    backgroundColor: "#E5E7EB",
   },
+
   statusBadge: {
     position: "absolute",
-    top: -35,
-    backgroundColor: "#fff",
+    bottom: -4,
+    backgroundColor: "rgba(0,0,0,0.65)",
     paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 8,
-    elevation: 3,
-    shadowOpacity: 0.1,
+    paddingVertical: 5,
+    borderRadius: 16,
   },
-  statusText: { fontSize: 13, color: "#666" },
+
+  statusText: {
+    color: "#fff",
+    fontSize: 12,
+  },
+
   statusArrow: {
     position: "absolute",
-    bottom: -6,
-    left: "45%",
+    top: -5,
+    alignSelf: "center",
     width: 0,
     height: 0,
     borderLeftWidth: 6,
     borderRightWidth: 6,
-    borderTopWidth: 6,
+    borderBottomWidth: 6,
     borderLeftColor: "transparent",
     borderRightColor: "transparent",
-    borderTopColor: "#fff",
+    borderBottomColor: "rgba(0,0,0,0.65)",
   },
+
   userNameText: {
+    marginTop: 18,
     fontSize: 22,
-    fontWeight: "bold",
+    fontWeight: "800",
+    color: "#111827",
+  },
+
+  editBioBtn: {
     marginTop: 12,
-    color: "#000",
-  },
-  editBioBtn: { flexDirection: "row", alignItems: "center", marginTop: 15 },
-  editBioText: { color: "#00a3ff", marginLeft: 8, fontSize: 15 },
-
-  // Actions
-  actionRow: {
     flexDirection: "row",
-    justifyContent: "center",
-    marginTop: 25,
-    paddingHorizontal: 10,
-  },
-  actionButton: {
     alignItems: "center",
-    marginHorizontal: 10,
-    backgroundColor: "#f1f3f5",
+    backgroundColor: "#EAF6FF",
+    paddingHorizontal: 16,
     paddingVertical: 10,
-    paddingHorizontal: 15,
-    borderRadius: 20,
+    borderRadius: 22,
+  },
+
+  editBioText: {
+    marginLeft: 7,
+    color: "#00a3ff",
+    fontWeight: "700",
+  },
+
+  actionRow: {
+    marginTop: 8,
     flexDirection: "row",
-  },
-  actionIconBg: { marginRight: 6 },
-  actionText: { fontWeight: "600", color: "#333", fontSize: 13 },
-
-  // Diary Empty
-  emptyDiarySection: {
-    marginTop: 60,
-    alignItems: "center",
-    paddingHorizontal: 40,
-  },
-  diaryIllustration: {
-    width: 100,
-    height: 100,
-    marginBottom: 20,
-    position: "relative",
-  },
-  diaryImg: { width: "100%", height: "100%", opacity: 0.5 },
-  heartIcon: { position: "absolute", top: 0, left: -10 },
-  msgIcon: { position: "absolute", bottom: 10, right: -10 },
-  diaryTitle: { fontSize: 18, fontWeight: "bold", color: "#000" },
-  diarySub: {
-    textAlign: "center",
-    color: "#888",
-    marginTop: 10,
-    lineHeight: 20,
-  },
-  postBtn: {
-    backgroundColor: "#007fff",
-    paddingHorizontal: 35,
-    paddingVertical: 12,
-    borderRadius: 25,
-    marginTop: 25,
-  },
-  postBtnText: { color: "#fff", fontWeight: "bold", fontSize: 16 },
-
-  // Overlay Modals
-  confirmOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: "rgba(0,0,0,0.8)",
-    justifyContent: "center",
-    alignItems: "center",
-    zIndex: 100,
-  },
-  confirmBox: {
-    width: "85%",
     backgroundColor: "#fff",
-    borderRadius: 20,
-    padding: 20,
-    alignItems: "center",
+    paddingVertical: 14,
   },
-  confirmTitle: { fontSize: 18, fontWeight: "bold", marginBottom: 15 },
-  previewAvatar: { width: 180, height: 180, borderRadius: 90 },
-  previewCover: { width: "100%", height: 160, borderRadius: 10 },
-  confirmActions: { flexDirection: "row", marginTop: 25, width: "100%" },
-  btnCancel: {
+
+  actionButton: {
     flex: 1,
     alignItems: "center",
-    padding: 12,
-    backgroundColor: "#eee",
-    borderRadius: 10,
-    marginRight: 10,
-  },
-  btnSave: {
-    flex: 1,
-    alignItems: "center",
-    padding: 12,
-    backgroundColor: "#007fff",
-    borderRadius: 10,
-  },
-  toast: {
-    position: "absolute",
-    top: 60,
-    left: 20,
-    right: 20,
-    padding: 14,
-    borderRadius: 14,
-    zIndex: 999,
-    elevation: 10,
+    justifyContent: "center",
   },
 
-  toastSuccess: {
-    backgroundColor: "#dcfce7",
-  },
-
-  toastError: {
-    backgroundColor: "#fee2e2",
-  },
-
-  toastText: {
-    textAlign: "center",
+  actionText: {
+    marginTop: 6,
+    color: "#111827",
     fontWeight: "600",
+  },
+
+  infoCard: {
+    marginTop: 8,
+    backgroundColor: "#fff",
+    paddingHorizontal: 16,
+    paddingVertical: 16,
+  },
+
+  cardTitle: {
+    fontSize: 17,
+    fontWeight: "800",
+    color: "#111827",
+    marginBottom: 12,
+  },
+
+  infoRow: {
+    flexDirection: "row",
+    paddingVertical: 9,
+    borderBottomWidth: 0.5,
+    borderBottomColor: "#eee",
+  },
+
+  infoLabel: {
+    width: 120,
+    color: "#6B7280",
     fontSize: 14,
+  },
+
+  infoValue: {
+    flex: 1,
+    color: "#111827",
+    fontSize: 14,
+    fontWeight: "600",
+  },
+
+  section: {
+    marginTop: 8,
+    backgroundColor: "#fff",
+  },
+
+  menuItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 16,
+    paddingVertical: 15,
+    borderBottomWidth: 0.5,
+    borderBottomColor: "#eee",
+  },
+
+  menuIconContainer: {
+    width: 32,
+    alignItems: "center",
+  },
+
+  menuTitle: {
+    flex: 1,
+    marginLeft: 12,
+    fontSize: 16,
+    color: "#111827",
+  },
+
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.55)",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 20,
+  },
+
+  previewBox: {
+    width: "100%",
+    backgroundColor: "#fff",
+    borderRadius: 22,
+    padding: 18,
+    alignItems: "center",
+  },
+
+  previewTitle: {
+    fontSize: 18,
+    fontWeight: "800",
+    color: "#111827",
+    marginBottom: 16,
+  },
+
+  previewAvatar: {
+    width: 150,
+    height: 150,
+    borderRadius: 75,
+    backgroundColor: "#E5E7EB",
+  },
+
+  previewCover: {
+    width: "100%",
+    height: 170,
+    borderRadius: 16,
+    backgroundColor: "#E5E7EB",
+  },
+
+  previewActions: {
+    width: "100%",
+    marginTop: 20,
+    flexDirection: "row",
+    gap: 12,
+  },
+
+  cancelBtn: {
+    flex: 1,
+    height: 48,
+    borderRadius: 12,
+    backgroundColor: "#F3F4F6",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  cancelText: {
+    color: "#111827",
+    fontWeight: "700",
+  },
+
+  saveBtn: {
+    flex: 1,
+    height: 48,
+    borderRadius: 12,
+    backgroundColor: "#007AFF",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  saveText: {
+    color: "#fff",
+    fontWeight: "800",
   },
 });
