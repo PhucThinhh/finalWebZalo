@@ -93,6 +93,15 @@ public class GroupController {
         groupService.updateRole(groupId, userId, role, currentUserId);
     }
 
+    @PutMapping("/transfer-owner")
+    public void transferOwner(
+            @RequestParam String groupId,
+            @RequestParam Long userId,
+            @RequestParam Long currentUserId
+    ) {
+        groupService.transferOwner(groupId, userId, currentUserId);
+    }
+
     // =========================
     // UPDATE GROUP AVATAR
     // =========================
@@ -111,9 +120,10 @@ public class GroupController {
     @DeleteMapping("/leave")
     public void leaveGroup(
             @RequestParam String groupId,
-            @RequestParam Long userId
+            @RequestParam Long userId,
+            @RequestParam(required = false) Long newOwnerId
     ) {
-        groupService.leaveGroup(groupId, userId);
+        groupService.leaveGroup(groupId, userId, newOwnerId);
     }
 
     @PutMapping("/name")

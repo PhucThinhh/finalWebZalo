@@ -85,9 +85,16 @@ export const updateRoleApi = (groupId, userId, role, currentUserId) => {
   );
 };
 
-export const leaveGroupApi = (groupId, userId) => {
+export const transferOwnerApi = (groupId, userId, currentUserId) => {
+  return axiosClient.put(
+    `/chat/group/transfer-owner?groupId=${groupId}&userId=${userId}&currentUserId=${currentUserId}`
+  );
+};
+
+export const leaveGroupApi = (groupId, userId, newOwnerId = null) => {
+  const ownerParam = newOwnerId ? `&newOwnerId=${newOwnerId}` : "";
   return axiosClient.delete(
-    `/chat/group/leave?groupId=${groupId}&userId=${userId}`
+    `/chat/group/leave?groupId=${groupId}&userId=${userId}${ownerParam}`
   );
 };
 

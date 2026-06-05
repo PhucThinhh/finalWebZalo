@@ -1,7 +1,23 @@
 import { useEffect, useState, useMemo, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "react-toastify";
-import { ChevronUp, Mic, MicOff, PhoneOff, Settings, Video } from "lucide-react";
+import {
+  BellOff,
+  ChevronUp,
+  Crown,
+  LogOut,
+  Mic,
+  MicOff,
+  PhoneOff,
+  Pin,
+  Search,
+  Settings,
+  Shield,
+  UserMinus,
+  UserPlus,
+  Users,
+  Video,
+} from "lucide-react";
 
 import Sidebar from "../components/Sidebar";
 import ChatBox from "../components/chatBox";
@@ -42,6 +58,7 @@ import {
   removeMemberApi,
   deleteGroupApi,
   updateRoleApi,
+  transferOwnerApi,
   leaveGroupApi,
   markAsReadApi,
   getUnreadCountApi,
@@ -108,12 +125,16 @@ function ChatPage() {
   const [showAddMemberModal, setShowAddMemberModal] = useState(false);
   const [showRemoveMemberModal, setShowRemoveMemberModal] = useState(false);
   const [showUpdateRoleModal, setShowUpdateRoleModal] = useState(false);
+  const [showTransferOwnerModal, setShowTransferOwnerModal] = useState(false);
   const [friendCandidates, setFriendCandidates] = useState([]);
   const [memberCandidates, setMemberCandidates] = useState([]);
   const [roleCandidates, setRoleCandidates] = useState([]);
   const [selectedMemberIds, setSelectedMemberIds] = useState([]);
   const [selectedRoleUserId, setSelectedRoleUserId] = useState(null);
   const [selectedRoleValue, setSelectedRoleValue] = useState("MEMBER");
+  const [currentGroupRole, setCurrentGroupRole] = useState("MEMBER");
+  const [ownerTransferCandidates, setOwnerTransferCandidates] = useState([]);
+  const [selectedOwnerTransferId, setSelectedOwnerTransferId] = useState(null);
 
   const [showRenameGroupModal, setShowRenameGroupModal] = useState(false);
   const [newGroupName, setNewGroupName] = useState("");
@@ -250,7 +271,7 @@ function ChatPage() {
   const memberRoleLabel = (role) => {
     const r = String(role || "MEMBER").toUpperCase();
     if (r === "OWNER") return "Chủ nhóm";
-    if (r === "ADMIN") return "Quản trị";
+    if (r === "ADMIN") return "Phó nhóm";
     return "Thành viên";
   };
 
@@ -292,6 +313,23 @@ function ChatPage() {
 
       role: getMemberRole(m),
     };
+  };
+
+  const loadGroupMemberRows = async (groupId = selectedGroup?.id) => {
+    if (!groupId) return [];
+
+    const [friendsRes, membersRes] = await Promise.all([
+      getFriendsApi(),
+      getGroupMembersApi(groupId),
+    ]);
+
+    const friends = Array.isArray(friendsRes.data) ? friendsRes.data : [];
+    const members = Array.isArray(membersRes.data) ? membersRes.data : [];
+    const friendById = new Map(
+      friends.map((friend) => [getFriendId(friend), friend])
+    );
+
+    return members.map((m) => enrichMemberFromDto(m, friendById)).filter(Boolean);
   };
 
   const sortConversationsByLatest = (list) => {
@@ -546,8 +584,31 @@ function ChatPage() {
     setSelectedForwardTargets([]);
   };
 
-  const handleOpenLeaveGroupConfirm = () => {
+  const handleOpenLeaveGroupConfirm = async () => {
     if (!selectedGroup?.id || !currentUserId) return;
+
+    try {
+      const rows = await loadGroupMemberRows(selectedGroup.id);
+      const me = rows.find((member) => member.id === Number(currentUserId));
+      const others = rows.filter(
+        (member) => member.id && member.id !== Number(currentUserId)
+      );
+
+      setCurrentGroupRole(me?.role || "MEMBER");
+
+      if (me?.role === "OWNER") {
+        setOwnerTransferCandidates(others);
+        setSelectedOwnerTransferId(null);
+      } else {
+        setOwnerTransferCandidates([]);
+        setSelectedOwnerTransferId(null);
+      }
+    } catch (error) {
+      console.log("Load leave group members lỗi:", error);
+      toast.error("Không tải được danh sách thành viên");
+      return;
+    }
+
     setShowLeaveConfirmModal(true);
   };
 
@@ -557,18 +618,50 @@ function ChatPage() {
     try {
       setLeavingGroup(true);
 
-      await leaveGroupApi(selectedGroup.id, Number(currentUserId));
+      const rows = await loadGroupMemberRows(selectedGroup.id);
+      const me = rows.find((member) => member.id === Number(currentUserId));
+      const isOwnerNow = me?.role === "OWNER";
+      const activeOtherMembers = rows.filter(
+        (member) => member.id && member.id !== Number(currentUserId)
+      );
+
+      setCurrentGroupRole(me?.role || "MEMBER");
+
+      let newOwnerId = null;
+
+      if (isOwnerNow && activeOtherMembers.length > 0) {
+        newOwnerId = selectedOwnerTransferId;
+
+        if (!newOwnerId) {
+          toast.error("Bạn cần chọn thành viên nhận quyền trưởng nhóm trước khi rời nhóm");
+          return;
+        }
+
+        const target = activeOtherMembers.find(
+          (member) => Number(member.id) === Number(newOwnerId)
+        );
+
+        if (!target || Number(target.id) === Number(currentUserId)) {
+          toast.error("Thành viên nhận quyền không hợp lệ");
+          return;
+        }
+
+        newOwnerId = Number(target.id);
+      }
+
+      await leaveGroupApi(selectedGroup.id, Number(currentUserId), newOwnerId);
 
       setIsRemovedFromGroup(true);
       setShowLeaveConfirmModal(false);
       setShowGroupMenu(false);
+      setInfoPanelOpen(false);
 
-      toast.success("Đã rời nhóm 👋");
+      toast.success("Đã rời nhóm");
     } catch (error) {
       const message = error?.response?.data || "Rời nhóm thất bại";
 
-      if (message.includes("Chủ nhóm")) {
-        toast.error("Bạn phải chuyển quyền trước khi rời nhóm");
+      if (String(message).includes("Truong nhom") || String(message).includes("Chủ nhóm")) {
+        toast.error("Bạn phải chọn trưởng nhóm mới trước khi rời nhóm");
         return;
       }
 
@@ -703,6 +796,47 @@ function ChatPage() {
   useEffect(() => {
     selectedGroupRef.current = selectedGroup;
   }, [selectedGroup]);
+
+  useEffect(() => {
+    if (!selectedGroup?.id || !currentUserId) {
+      setCurrentGroupRole("MEMBER");
+      setOwnerTransferCandidates([]);
+      setSelectedOwnerTransferId(null);
+      return;
+    }
+
+    let cancelled = false;
+
+    const syncCurrentGroupRole = async () => {
+      try {
+        const rows = await loadGroupMemberRows(selectedGroup.id);
+        if (cancelled) return;
+
+        const me = rows.find((member) => member.id === Number(currentUserId));
+        const otherMembers = rows.filter(
+          (member) => member.id && member.id !== Number(currentUserId)
+        );
+
+        setCurrentGroupRole(me?.role || "MEMBER");
+        setGroupMemberCount(rows.length);
+        setOwnerTransferCandidates(otherMembers);
+        setSelectedOwnerTransferId(otherMembers[0]?.id ?? null);
+      } catch (error) {
+        console.log("Load group role lỗi:", error);
+        if (!cancelled) {
+          setCurrentGroupRole("MEMBER");
+          setOwnerTransferCandidates([]);
+          setSelectedOwnerTransferId(null);
+        }
+      }
+    };
+
+    syncCurrentGroupRole();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedGroup?.id, currentUserId]);
 
   useEffect(() => {
     currentUserIdRef.current = currentUserId;
@@ -2320,21 +2454,7 @@ function ChatPage() {
     setViewMembersList([]);
 
     try {
-      const [friendsRes, membersRes] = await Promise.all([
-        getFriendsApi(),
-        getGroupMembersApi(selectedGroup.id),
-      ]);
-
-      const friends = Array.isArray(friendsRes.data) ? friendsRes.data : [];
-      const friendById = new Map(
-        friends.map((friend) => [getFriendId(friend), friend])
-      );
-
-      const members = Array.isArray(membersRes.data) ? membersRes.data : [];
-
-      const rows = members
-        .map((m) => enrichMemberFromDto(m, friendById))
-        .filter(Boolean);
+      const rows = await loadGroupMemberRows(selectedGroup.id);
 
       setViewMembersList(rows);
       setGroupMemberCount(rows.length);
@@ -2384,24 +2504,15 @@ function ChatPage() {
   const handleOpenRemoveMemberModal = async () => {
     try {
       if (!selectedGroup?.id) return;
+      if (!isCurrentGroupManager) {
+        toast.error("Chỉ trưởng nhóm hoặc phó nhóm mới được xoá thành viên");
+        return;
+      }
 
-      const [friendsRes, membersRes] = await Promise.all([
-        getFriendsApi(),
-        getGroupMembersApi(selectedGroup.id),
-      ]);
-
-      const friends = Array.isArray(friendsRes.data) ? friendsRes.data : [];
-      const members = Array.isArray(membersRes.data) ? membersRes.data : [];
-
-      const friendById = new Map(
-        friends.map((friend) => [getFriendId(friend), friend])
-      );
-
-      const mappedMembers = members
-        .map((m) => enrichMemberFromDto(m, friendById))
-        .filter(Boolean)
+      const mappedMembers = (await loadGroupMemberRows(selectedGroup.id))
         .filter((row) => row.id && row.id !== Number(currentUserId))
-        .filter((row) => row.role !== "OWNER");
+        .filter((row) => row.role !== "OWNER")
+        .filter((row) => isCurrentGroupOwner || row.role !== "ADMIN");
 
       setMemberCandidates(mappedMembers);
       setSelectedMemberIds([]);
@@ -2417,20 +2528,16 @@ function ChatPage() {
     try {
       if (!selectedGroup?.id) return;
 
-      const [friendsRes, membersRes] = await Promise.all([
-        getFriendsApi(),
-        getGroupMembersApi(selectedGroup.id),
-      ]);
+      const rows = await loadGroupMemberRows(selectedGroup.id);
+      const me = rows.find((member) => member.id === Number(currentUserId));
+      setCurrentGroupRole(me?.role || "MEMBER");
 
-      const friends = Array.isArray(friendsRes.data) ? friendsRes.data : [];
-      const members = Array.isArray(membersRes.data) ? membersRes.data : [];
-      const friendById = new Map(
-        friends.map((friend) => [getFriendId(friend), friend])
-      );
+      if (me?.role !== "OWNER") {
+        toast.error("Chỉ trưởng nhóm mới được bầu hoặc hạ phó nhóm");
+        return;
+      }
 
-      const mappedRoleCandidates = members
-        .map((m) => enrichMemberFromDto(m, friendById))
-        .filter(Boolean)
+      const mappedRoleCandidates = rows
         .filter(
           (member) =>
             member.id &&
@@ -2446,6 +2553,36 @@ function ChatPage() {
     } catch (error) {
       console.error("Load role members lỗi:", error);
       toast.error("Không tải được danh sách thành viên");
+    }
+  };
+
+  const handleOpenTransferOwnerModal = async () => {
+    try {
+      if (!selectedGroup?.id || !currentUserId) return;
+
+      const rows = await loadGroupMemberRows(selectedGroup.id);
+      const me = rows.find((member) => member.id === Number(currentUserId));
+      setCurrentGroupRole(me?.role || "MEMBER");
+
+      if (me?.role !== "OWNER") {
+        toast.error("Chỉ trưởng nhóm mới được chuyển quyền trưởng nhóm");
+        return;
+      }
+
+      const candidates = rows.filter(
+        (member) =>
+          member.id &&
+          member.id !== Number(currentUserId) &&
+          member.role !== "OWNER"
+      );
+
+      setOwnerTransferCandidates(candidates);
+      setSelectedOwnerTransferId(null);
+      setShowTransferOwnerModal(true);
+      setShowGroupMenu(false);
+    } catch (error) {
+      console.error("Load transfer owner members lỗi:", error);
+      toast.error("Không tải được danh sách thành viên để chuyển quyền");
     }
   };
 
@@ -2482,19 +2619,19 @@ function ChatPage() {
       console.error("Add member lỗi:", error);
       const message = error?.response?.data || "Thêm thành viên thất bại";
 
-      if (typeof message === "string" && message.includes("Không thuộc nhóm")) {
+      if (
+        typeof message === "string" &&
+        (message.includes("Không thuộc nhóm") ||
+          message.includes("Khong thuoc nhom"))
+      ) {
         toast.error("Không thuộc nhóm");
-        return;
-      }
-
-      if (typeof message === "string" && message.includes("Không có quyền")) {
-        toast.error("Không có quyền");
         return;
       }
 
       if (
         typeof message === "string" &&
-        message.includes("User đã trong nhóm")
+        (message.includes("User đã trong nhóm") ||
+          message.includes("User da trong nhom"))
       ) {
         toast.error("User đã trong nhóm");
         return;
@@ -2693,6 +2830,63 @@ function ChatPage() {
     }
   };
 
+  const handleTransferOwner = async (targetUserId = selectedOwnerTransferId) => {
+    if (!selectedGroup?.id || !targetUserId || !currentUserId) return;
+
+    try {
+      const rows = await loadGroupMemberRows(selectedGroup.id);
+      const me = rows.find((member) => member.id === Number(currentUserId));
+      const target = rows.find((member) => member.id === Number(targetUserId));
+
+      setCurrentGroupRole(me?.role || "MEMBER");
+
+      if (me?.role !== "OWNER") {
+        toast.error("Chỉ trưởng nhóm hiện tại mới được chuyển quyền");
+        return;
+      }
+
+      if (!target || target.role === "OWNER") {
+        toast.error("Thành viên nhận quyền không hợp lệ");
+        return;
+      }
+
+      await transferOwnerApi(
+        selectedGroup.id,
+        Number(targetUserId),
+        Number(currentUserId)
+      );
+
+      setCurrentGroupRole("ADMIN");
+      setRoleCandidates((prev) =>
+        prev.map((member) =>
+          member.id === Number(targetUserId)
+            ? { ...member, role: "OWNER" }
+            : member
+        )
+      );
+      setShowUpdateRoleModal(false);
+      setShowTransferOwnerModal(false);
+      setShowLeaveConfirmModal(false);
+      setSelectedOwnerTransferId(null);
+      toast.success("Đã chuyển quyền trưởng nhóm");
+    } catch (error) {
+      console.error("Transfer owner lỗi:", error);
+      const message = error?.response?.data || "Chuyển quyền trưởng nhóm thất bại";
+
+      if (String(message).includes("Chi truong nhom")) {
+        toast.error("Chỉ trưởng nhóm hiện tại mới được chuyển quyền");
+        return;
+      }
+
+      if (String(message).includes("khong thuoc nhom") || String(message).includes("roi nhom")) {
+        toast.error("Bạn không còn là thành viên hoạt động của nhóm này");
+        return;
+      }
+
+      toast.error(message);
+    }
+  };
+
   const currentTitle = selectedGroup
     ? selectedGroup.name
     : friendNickname || selectedUser?.username || "Cuộc trò chuyện";
@@ -2742,6 +2936,10 @@ function ChatPage() {
     ? resolveAvatar(selectedGroup?.avatar)
     : resolveAvatar(selectedUser?.avatar);
 
+  const isCurrentGroupOwner = currentGroupRole === "OWNER";
+  const isCurrentGroupManager =
+    currentGroupRole === "OWNER" || currentGroupRole === "ADMIN";
+
   const resolveChatAsset = (url) => {
     if (!url) return "";
     const value = String(url);
@@ -2775,6 +2973,152 @@ function ChatPage() {
         : null;
     })
     .filter(Boolean);
+
+  const normalizeAiSearchText = (value) =>
+    String(value || "")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/đ/g, "d")
+      .replace(/Đ/g, "D")
+      .toLowerCase();
+
+  const aiSearchStopWords = new Set([
+    "ai",
+    "anh",
+    "cho",
+    "co",
+    "cua",
+    "dua",
+    "file",
+    "giup",
+    "hinh",
+    "link",
+    "minh",
+    "nay",
+    "pdf",
+    "ra",
+    "tai",
+    "tim",
+    "trong",
+    "xem",
+  ]);
+
+  const getAiSearchTokens = (question) =>
+    normalizeAiSearchText(question)
+      .split(/[^a-z0-9]+/i)
+      .map((token) => token.trim())
+      .filter((token) => token.length > 2 && !aiSearchStopWords.has(token));
+
+  const getAiAssistantAttachments = (question) => {
+    const normalizedQuestion = normalizeAiSearchText(question);
+    const tokens = getAiSearchTokens(question);
+    const wantsImages = /\b(anh|hinh|image|photo|picture|jpeg|jpg|png|gif|webp)\b/.test(
+      normalizedQuestion
+    );
+    const wantsLinks = /\b(link|url|website|web|trang)\b/.test(
+      normalizedQuestion
+    );
+    const wantsFiles = /\b(file|tep|pdf|doc|docx|word|excel|xls|xlsx|ppt|pptx|slide|zip|rar|video|mp4|wmv)\b/.test(
+      normalizedQuestion
+    );
+
+    const hasUsefulTokenMatch = (text) => {
+      if (!tokens.length) return true;
+      const normalizedText = normalizeAiSearchText(text);
+      return tokens.some((token) => normalizedText.includes(token));
+    };
+
+    const matchesFileType = (fileName) => {
+      const normalizedFileName = normalizeAiSearchText(fileName);
+      if (normalizedQuestion.includes("pdf")) {
+        return normalizedFileName.endsWith(".pdf");
+      }
+      if (/\b(doc|docx|word)\b/.test(normalizedQuestion)) {
+        return /\.(doc|docx)$/i.test(fileName);
+      }
+      if (/\b(excel|xls|xlsx)\b/.test(normalizedQuestion)) {
+        return /\.(xls|xlsx)$/i.test(fileName);
+      }
+      if (/\b(ppt|pptx|slide)\b/.test(normalizedQuestion)) {
+        return /\.(ppt|pptx)$/i.test(fileName);
+      }
+      if (/\b(zip|rar)\b/.test(normalizedQuestion)) {
+        return /\.(zip|rar)$/i.test(fileName);
+      }
+      if (/\b(video|mp4|wmv)\b/.test(normalizedQuestion)) {
+        return /\.(mp4|mov|avi|wmv|mkv|webm)$/i.test(fileName);
+      }
+      return true;
+    };
+
+    const attachments = [];
+
+    if (wantsImages) {
+      sharedMediaMessages
+        .filter((msg) =>
+          hasUsefulTokenMatch(`${msg.fileUrl || ""} ${msg.content || ""}`)
+        )
+        .slice(0, 8)
+        .forEach((msg, index) => {
+          const url = resolveChatAsset(msg.fileUrl);
+          attachments.push({
+            id: msg.id || msg._id || `image_${index}`,
+            type: "image",
+            title: String(msg.fileUrl || "Ảnh trong chat").split("/").pop(),
+            subtitle: msg.createdAt
+              ? `Gửi lúc ${msg.createdAt}`
+              : "Ảnh trong hội thoại",
+            url,
+            thumbnailUrl: url,
+          });
+        });
+    }
+
+    if (wantsFiles) {
+      sharedFileMessages
+        .filter((msg) => {
+          const fileName = String(msg.fileUrl || "").split("/").pop();
+          return (
+            matchesFileType(fileName) &&
+            hasUsefulTokenMatch(`${fileName} ${msg.content || ""}`)
+          );
+        })
+        .slice(0, 8)
+        .forEach((msg, index) => {
+          const fileName = String(msg.fileUrl || "Tệp đính kèm")
+            .split("/")
+            .pop();
+          attachments.push({
+            id: msg.id || msg._id || `file_${index}`,
+            type: "file",
+            title: fileName,
+            subtitle: msg.createdAt
+              ? `Gửi lúc ${msg.createdAt}`
+              : "Tệp trong hội thoại",
+            url: resolveChatAsset(msg.fileUrl),
+          });
+        });
+    }
+
+    if (wantsLinks) {
+      sharedLinks
+        .filter((link) => hasUsefulTokenMatch(link.url))
+        .slice(0, 8)
+        .forEach((link, index) => {
+          attachments.push({
+            id: link.id || `link_${index}`,
+            type: "link",
+            title: link.url.replace(/^https?:\/\//i, ""),
+            subtitle: link.createdAt
+              ? `Gửi lúc ${link.createdAt}`
+              : "Link trong hội thoại",
+            url: link.url,
+          });
+        });
+    }
+
+    return attachments.slice(0, 10);
+  };
 
   const formatAiMessage = (msg) => {
     const senderId = msg.senderId || msg.sender?._id || msg.sender || msg.userId;
@@ -2889,13 +3233,28 @@ function ChatPage() {
   };
 
   const handleAskAiAssistant = async (question) => {
+    const attachments = getAiAssistantAttachments(question);
     const context = await buildAiAssistantContext();
     const res = await askAiAssistantApi({
       question,
       context,
     });
 
-    return res.data?.answer || "AI chưa có phản hồi.";
+    const answer = res.data?.answer || "AI chưa có phản hồi.";
+
+    if (!attachments.length) {
+      return { answer, attachments: [] };
+    }
+
+    const attachmentLabel =
+      attachments.length === 1
+        ? "Mình đã đính kèm kết quả phù hợp bên dưới."
+        : `Mình đã đính kèm ${attachments.length} kết quả phù hợp bên dưới.`;
+
+    return {
+      answer: `${answer}\n\n${attachmentLabel}`,
+      attachments,
+    };
   };
 
   const handleToggleBlockUser = async () => {
@@ -3467,37 +3826,43 @@ function ChatPage() {
                 )}
               </div>
 
-              <div className="mt-6 grid grid-cols-3 gap-3">
+              <div
+                className={`mt-6 grid gap-3 ${
+                  selectedGroup ? "grid-cols-4" : "grid-cols-3"
+                }`}
+              >
                 <button
                   type="button"
                   onClick={handleToggleMuteConversation}
                   className="flex flex-col items-center gap-2 text-sm text-slate-200"
                 >
                   <span
-                    className={`w-11 h-11 rounded-full flex items-center justify-center text-xl ${
+                    className={`w-11 h-11 rounded-full flex items-center justify-center ${
                       isCurrentConversationMuted
                         ? "bg-amber-500/20 text-amber-300"
                         : "bg-slate-700"
                     }`}
                   >
-                    🔕
+                    <BellOff size={20} />
                   </span>
-                  Tắt thông báo
+                  <span className="text-xs leading-tight">Tắt thông báo</span>
                 </button>
 
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowMessageSearch(true);
-                    setInfoPanelOpen(false);
-                  }}
-                  className="flex flex-col items-center gap-2 text-sm text-slate-200"
-                >
-                  <span className="w-11 h-11 rounded-full bg-slate-700 flex items-center justify-center text-xl">
-                    🔍
-                  </span>
-                  Tìm tin
-                </button>
+                {!selectedGroup && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowMessageSearch(true);
+                      setInfoPanelOpen(false);
+                    }}
+                    className="flex flex-col items-center gap-2 text-sm text-slate-200"
+                  >
+                    <span className="w-11 h-11 rounded-full bg-slate-700 flex items-center justify-center">
+                      <Search size={20} />
+                    </span>
+                    <span className="text-xs leading-tight">Tìm tin</span>
+                  </button>
+                )}
 
                 <button
                   type="button"
@@ -3505,18 +3870,149 @@ function ChatPage() {
                   className="flex flex-col items-center gap-2 text-sm text-slate-200"
                 >
                   <span
-                    className={`w-11 h-11 rounded-full flex items-center justify-center text-xl ${
+                    className={`w-11 h-11 rounded-full flex items-center justify-center ${
                       isCurrentConversationPinned
                         ? "bg-blue-500/20 text-blue-300"
                         : "bg-slate-700"
                     }`}
                   >
-                    📌
+                    <Pin size={20} />
                   </span>
-                  Ghim hội thoại
+                  <span className="text-xs leading-tight">Ghim hội thoại</span>
                 </button>
+
+                {selectedGroup && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={handleOpenAddMemberModal}
+                      className="flex flex-col items-center gap-2 text-sm text-slate-200"
+                    >
+                      <span className="w-11 h-11 rounded-full bg-slate-700 flex items-center justify-center">
+                        <UserPlus size={20} />
+                      </span>
+                      <span className="text-xs leading-tight">Thêm thành viên</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const section = document.getElementById("group-manage-panel");
+                        section?.scrollIntoView({ behavior: "smooth", block: "start" });
+                      }}
+                      className="flex flex-col items-center gap-2 text-sm text-slate-200"
+                    >
+                      <span className="w-11 h-11 rounded-full bg-slate-700 flex items-center justify-center">
+                        <Settings size={20} />
+                      </span>
+                      <span className="text-xs leading-tight">Quản lý nhóm</span>
+                    </button>
+                  </>
+                )}
               </div>
             </section>
+
+            {selectedGroup && (
+              <section
+                id="group-manage-panel"
+                className="border-t border-slate-900 bg-[#1f242b]"
+              >
+                <div className="px-5 py-4 flex items-center justify-between">
+                  <h4 className="text-lg font-bold">Thành viên nhóm</h4>
+                  <span className="text-xs px-2 py-1 rounded-full bg-slate-700 text-slate-300">
+                    {memberRoleLabel(currentGroupRole)}
+                  </span>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleOpenViewMembersModal}
+                  className="w-full px-5 pb-4 flex items-center gap-3 text-left hover:bg-white/5"
+                >
+                  <span className="w-10 h-10 rounded-full bg-slate-700 flex items-center justify-center text-slate-200">
+                    <Users size={21} />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div className="font-semibold">{groupMemberCount} thành viên</div>
+                    <div className="text-xs text-slate-400 mt-0.5">
+                      Xem danh sách thành viên trong nhóm
+                    </div>
+                  </div>
+                </button>
+
+                {!isRemovedFromGroup && (
+                  <div className="px-5 pb-5 space-y-2">
+                    <button
+                      type="button"
+                      onClick={handleOpenAddMemberModal}
+                      className="w-full flex items-center gap-3 rounded-lg px-1 py-3 hover:bg-white/5 text-left"
+                    >
+                      <span className="w-10 h-10 rounded-full bg-slate-700 flex items-center justify-center text-emerald-300">
+                        <UserPlus size={20} />
+                      </span>
+                      <span className="font-semibold">Thêm thành viên</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={handleOpenRemoveMemberModal}
+                      disabled={!isCurrentGroupManager}
+                      className="w-full flex items-center gap-3 rounded-lg px-1 py-3 hover:bg-white/5 text-left disabled:opacity-45"
+                    >
+                      <span className="w-10 h-10 rounded-full bg-slate-700 flex items-center justify-center text-red-300">
+                        <UserMinus size={20} />
+                      </span>
+                      <span className="font-semibold">Xóa thành viên</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={handleOpenUpdateRoleModal}
+                      disabled={!isCurrentGroupOwner}
+                      className="w-full flex items-center gap-3 rounded-lg px-1 py-3 hover:bg-white/5 text-left disabled:opacity-45"
+                    >
+                      <span className="w-10 h-10 rounded-full bg-slate-700 flex items-center justify-center text-blue-300">
+                        <Shield size={20} />
+                      </span>
+                      <div>
+                        <div className="font-semibold">Bầu / hạ phó nhóm</div>
+                        <div className="text-xs text-slate-400 mt-0.5">
+                          Chỉ trưởng nhóm được thực hiện
+                        </div>
+                      </div>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={handleOpenTransferOwnerModal}
+                      disabled={!isCurrentGroupOwner}
+                      className="w-full flex items-center gap-3 rounded-lg px-1 py-3 hover:bg-white/5 text-left disabled:opacity-45"
+                    >
+                      <span className="w-10 h-10 rounded-full bg-slate-700 flex items-center justify-center text-yellow-300">
+                        <Crown size={20} />
+                      </span>
+                      <div>
+                        <div className="font-semibold">Chuyển quyền trưởng nhóm</div>
+                        <div className="text-xs text-slate-400 mt-0.5">
+                          Chọn thành viên thay bạn làm trưởng nhóm
+                        </div>
+                      </div>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={handleOpenLeaveGroupConfirm}
+                      className="w-full flex items-center gap-3 rounded-lg px-1 py-3 hover:bg-red-500/10 text-left text-red-400"
+                    >
+                      <span className="w-10 h-10 rounded-full bg-red-500/10 flex items-center justify-center">
+                        <LogOut size={20} />
+                      </span>
+                      <span className="font-semibold">Rời nhóm</span>
+                    </button>
+                  </div>
+                )}
+              </section>
+            )}
 
             <section className="border-t border-slate-900 bg-[#1f242b]">
               <div className="px-5 py-4 flex items-center justify-between">
@@ -4568,7 +5064,7 @@ function ChatPage() {
 
       {showLeaveConfirmModal && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[1200]">
-          <div className="w-[400px] bg-white text-slate-900 rounded-2xl shadow-2xl overflow-hidden">
+          <div className="w-[460px] bg-white text-slate-900 rounded-2xl shadow-2xl overflow-hidden">
             <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between">
               <div>
                 <h3 className="text-lg font-semibold text-slate-900">
@@ -4608,6 +5104,52 @@ function ChatPage() {
               <div className="rounded-xl bg-slate-50 border border-slate-200 px-4 py-3 text-sm text-slate-600 leading-relaxed">
                 Bạn có chắc muốn rời khỏi nhóm này không?
               </div>
+
+              {isCurrentGroupOwner && ownerTransferCandidates.length > 0 && (
+                <div className="mt-4 rounded-xl border border-yellow-200 bg-yellow-50 p-4">
+                  <div className="font-semibold text-yellow-800">
+                    Chọn trưởng nhóm mới trước khi rời
+                  </div>
+                  <div className="text-xs text-yellow-700 mt-1">
+                    Hệ thống sẽ chuyển quyền cho người này rồi mới cho bạn rời nhóm.
+                  </div>
+
+                  <div className="mt-3 max-h-48 overflow-y-auto space-y-2">
+                    {ownerTransferCandidates.map((member) => (
+                      <button
+                        type="button"
+                        key={member.id}
+                        onClick={() => setSelectedOwnerTransferId(Number(member.id))}
+                        className={`w-full flex items-center gap-3 rounded-lg border px-3 py-2 text-left transition ${
+                          Number(selectedOwnerTransferId) === Number(member.id)
+                            ? "border-yellow-500 bg-white"
+                            : "border-transparent bg-white/60 hover:bg-white"
+                        }`}
+                      >
+                        <img
+                          src={resolveAvatar(member?.avatar)}
+                          alt=""
+                          onError={(e) => {
+                            e.currentTarget.src = DEFAULT_AVATAR;
+                          }}
+                          className="w-10 h-10 rounded-full object-cover bg-slate-200"
+                        />
+                        <div className="min-w-0 flex-1">
+                          <div className="font-semibold text-slate-900 truncate">
+                            {member.username}
+                          </div>
+                          <div className="text-xs text-slate-500">
+                            {memberRoleLabel(member.role)}
+                          </div>
+                        </div>
+                        {Number(selectedOwnerTransferId) === Number(member.id) && (
+                          <Crown size={18} className="text-yellow-500" />
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
 
             <div className="px-5 py-4 border-t border-slate-200 flex justify-end gap-3">
@@ -5065,6 +5607,103 @@ function ChatPage() {
         </div>
       )}
 
+      {showTransferOwnerModal && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[1000]">
+          <div className="w-[460px] max-h-[88vh] bg-white text-slate-900 rounded-2xl shadow-2xl overflow-hidden">
+            <div className="h-16 px-5 flex items-center justify-between border-b border-slate-200 bg-white">
+              <div>
+                <h3 className="text-lg font-semibold text-slate-900">
+                  Chuyển quyền trưởng nhóm
+                </h3>
+                <p className="text-sm text-slate-500 mt-0.5">
+                  Chọn một thành viên làm trưởng nhóm mới
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setShowTransferOwnerModal(false);
+                  setSelectedOwnerTransferId(null);
+                }}
+                className="w-9 h-9 rounded-full hover:bg-slate-100 flex items-center justify-center text-2xl text-slate-600"
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="max-h-[calc(88vh-144px)] overflow-y-auto">
+              {ownerTransferCandidates.length === 0 ? (
+                <div className="py-12 text-center text-slate-500 text-sm">
+                  Không có thành viên phù hợp để chuyển quyền
+                </div>
+              ) : (
+                <div className="p-5 space-y-2">
+                  <div className="rounded-xl border border-yellow-200 bg-yellow-50 px-4 py-3 text-sm text-yellow-800 leading-relaxed">
+                    Sau khi chuyển quyền, bạn sẽ trở thành phó nhóm. Trưởng nhóm mới sẽ có toàn quyền quản lý nhóm.
+                  </div>
+
+                  {ownerTransferCandidates.map((member) => (
+                    <button
+                      type="button"
+                      key={member.id}
+                      onClick={() => setSelectedOwnerTransferId(Number(member.id))}
+                      className={`w-full flex items-center gap-3 rounded-xl border px-3 py-3 text-left transition ${
+                        Number(selectedOwnerTransferId) === Number(member.id)
+                          ? "border-yellow-500 bg-yellow-50"
+                          : "border-slate-200 hover:bg-slate-50"
+                      }`}
+                    >
+                      <img
+                        src={resolveAvatar(member?.avatar)}
+                        alt=""
+                        onError={(e) => {
+                          e.currentTarget.src = DEFAULT_AVATAR;
+                        }}
+                        className="w-11 h-11 rounded-full object-cover bg-slate-200"
+                      />
+                      <div className="min-w-0 flex-1">
+                        <div className="font-semibold text-slate-900 truncate">
+                          {member.username}
+                        </div>
+                        <div className="text-sm text-slate-500">
+                          {memberRoleLabel(member.role)}
+                        </div>
+                      </div>
+                      {Number(selectedOwnerTransferId) === Number(member.id) && (
+                        <Crown size={20} className="text-yellow-500" />
+                      )}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="h-20 px-5 border-t border-slate-200 bg-white flex justify-end items-center gap-3">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowTransferOwnerModal(false);
+                  setSelectedOwnerTransferId(null);
+                }}
+                className="px-5 py-2.5 rounded-xl bg-slate-100 text-slate-700 font-semibold hover:bg-slate-200"
+              >
+                Huỷ
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleTransferOwner(selectedOwnerTransferId)}
+                disabled={!selectedOwnerTransferId}
+                className="px-5 py-2.5 rounded-xl bg-yellow-500 text-white font-semibold hover:bg-yellow-600 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Chuyển quyền
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showUpdateRoleModal && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[999]">
           <div className="w-[460px] max-h-[88vh] bg-white text-slate-900 rounded-2xl shadow-2xl overflow-hidden">
@@ -5188,9 +5827,9 @@ function ChatPage() {
                             : "bg-white border-slate-200 text-slate-700 hover:bg-slate-50"
                         }`}
                       >
-                        <div className="font-semibold">Quản trị viên</div>
+                        <div className="font-semibold">Phó nhóm</div>
                         <div className="text-xs text-slate-500 mt-1">
-                          Thêm, xoá thành viên
+                          Được xoá thành viên và quản lý nhóm
                         </div>
                       </button>
                     </div>

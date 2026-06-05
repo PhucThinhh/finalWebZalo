@@ -22,7 +22,6 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Random;
 import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -123,20 +122,16 @@ public class GroupService {
 
     public void addMember(String groupId, Long userId, Long currentUserId) {
 
-        GroupMember me = memberRepo
+        memberRepo
                 .findByGroupIdAndUserIdAndRemovedFalse(groupId, currentUserId)
-                .orElseThrow(() -> new RuntimeException("Không thuộc nhóm"));
-
-        if (me.getRole() != GroupRole.ADMIN && me.getRole() != GroupRole.OWNER) {
-            throw new RuntimeException("Không có quyền");
-        }
+                .orElseThrow(() -> new RuntimeException("Khong thuoc nhom"));
 
         GroupMember oldMember = memberRepo
                 .findByGroupIdAndUserId(groupId, userId)
                 .orElse(null);
 
         if (oldMember != null && Boolean.FALSE.equals(oldMember.getRemoved())) {
-            throw new RuntimeException("User đã trong nhóm");
+            throw new RuntimeException("User da trong nhom");
         }
 
         if (oldMember != null && Boolean.TRUE.equals(oldMember.getRemoved())) {
@@ -156,7 +151,7 @@ public class GroupService {
 
         publishGroupSystemMessage(
                 groupId,
-                getDisplayName(userId) + " đã được thêm vào nhóm bởi " + getDisplayName(currentUserId)
+                getDisplayName(userId) + " da duoc them vao nhom boi " + getDisplayName(currentUserId)
         );
 
         notifyGroupChanged(Set.of(userId), "GROUP_MEMBER_ADDED", groupId);
@@ -270,27 +265,61 @@ public class GroupService {
     }
 
     public void updateRole(String groupId, Long targetUserId, GroupRole newRole, Long currentUserId) {
+        if (newRole == GroupRole.OWNER) {
+            throw new RuntimeException("Hay dung API chuyen quyen truong nhom");
+        }
 
-        /*
-         * SỬA Ở ĐÂY:
-         * Người đã bị kick không được cập nhật quyền.
-         */
         GroupMember me = memberRepo.findByGroupIdAndUserIdAndRemovedFalse(groupId, currentUserId)
-                .orElseThrow(() -> new RuntimeException("Không thuộc nhóm"));
+                .orElseThrow(() -> new RuntimeException("Ban khong thuoc nhom"));
 
         if (me.getRole() != GroupRole.OWNER) {
-            throw new RuntimeException("Không có quyền");
+            throw new RuntimeException("Chi truong nhom moi duoc cap nhat quyen");
         }
 
         GroupMember target = memberRepo.findByGroupIdAndUserIdAndRemovedFalse(groupId, targetUserId)
-                .orElseThrow(() -> new RuntimeException("User không tồn tại hoặc đã bị xoá khỏi nhóm"));
+                .orElseThrow(() -> new RuntimeException("Thanh vien khong ton tai hoac da bi xoa khoi nhom"));
 
         if (target.getRole() == GroupRole.OWNER) {
-            throw new RuntimeException("Không thể sửa OWNER");
+            throw new RuntimeException("Khong the sua quyen truong nhom bang API nay");
         }
 
         target.setRole(newRole);
         memberRepo.save(target);
+    }
+
+    public void transferOwner(String groupId, Long targetUserId, Long currentUserId) {
+        GroupMember me = memberRepo.findByGroupIdAndUserIdAndRemovedFalse(groupId, currentUserId)
+                .orElseThrow(() -> new RuntimeException("Khong thuoc nhom"));
+
+        if (me.getRole() != GroupRole.OWNER) {
+            throw new RuntimeException("Chi truong nhom moi duoc chuyen quyen");
+        }
+
+        if (Objects.equals(targetUserId, currentUserId)) {
+            throw new RuntimeException("Khong the chuyen quyen cho chinh minh");
+        }
+
+        GroupMember target = memberRepo.findByGroupIdAndUserIdAndRemovedFalse(groupId, targetUserId)
+                .orElseThrow(() -> new RuntimeException("Thanh vien khong ton tai hoac da bi xoa khoi nhom"));
+
+        me.setRole(GroupRole.ADMIN);
+        target.setRole(GroupRole.OWNER);
+
+        memberRepo.save(me);
+        memberRepo.save(target);
+
+        publishGroupSystemMessage(
+                groupId,
+                getDisplayName(currentUserId) + " da chuyen quyen truong nhom cho " + getDisplayName(targetUserId)
+        );
+
+        List<GroupMember> members = memberRepo.findByGroupIdAndRemovedFalse(groupId);
+        Set<Long> notifyUsers = members.stream()
+                .map(GroupMember::getUserId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
+
+        notifyGroupChanged(notifyUsers, "GROUP_OWNER_TRANSFERRED", groupId);
     }
 
     public Group updateGroupAvatar(String groupId, String avatarUrl, Long currentUserId) {
@@ -398,6 +427,10 @@ public class GroupService {
     }
 
     public void leaveGroup(String groupId, Long userId) {
+        leaveGroup(groupId, userId, null);
+    }
+
+    public void leaveGroup(String groupId, Long userId, Long newOwnerId) {
 
         /*
          * Người đã removed không thể rời nhóm lần nữa.
@@ -431,24 +464,30 @@ public class GroupService {
                 return;
             }
 
-            List<GroupMember> others = members.stream()
-                    .filter(m -> !m.getUserId().equals(userId))
-                    .toList();
-
-            GroupMember newOwner;
-
-            List<GroupMember> admins = others.stream()
-                    .filter(m -> m.getRole() == GroupRole.ADMIN)
-                    .toList();
-
-            if (!admins.isEmpty()) {
-                newOwner = admins.get(new Random().nextInt(admins.size()));
-            } else {
-                newOwner = others.get(new Random().nextInt(others.size()));
+            if (newOwnerId == null || Objects.equals(newOwnerId, userId)) {
+                throw new RuntimeException("Truong nhom phai chon thanh vien nhan quyen truoc khi roi nhom");
             }
+
+            GroupMember newOwner = members.stream()
+                    .filter(m -> Objects.equals(m.getUserId(), newOwnerId))
+                    .findFirst()
+                    .orElseThrow(() -> new RuntimeException("Thanh vien nhan quyen khong hop le"));
+
+            members.stream()
+                    .filter(m -> m.getRole() == GroupRole.OWNER)
+                    .filter(m -> !Objects.equals(m.getUserId(), newOwnerId))
+                    .forEach(m -> {
+                        m.setRole(GroupRole.ADMIN);
+                        memberRepo.save(m);
+                    });
 
             newOwner.setRole(GroupRole.OWNER);
             memberRepo.save(newOwner);
+
+            publishGroupSystemMessage(
+                    groupId,
+                    getDisplayName(userId) + " da chuyen quyen truong nhom cho " + getDisplayName(newOwnerId)
+            );
         }
 
         /*
@@ -465,7 +504,13 @@ public class GroupService {
                 getDisplayName(userId) + " đã rời nhóm"
         );
 
-        notifyGroupChanged(Set.of(userId), "GROUP_MEMBER_REMOVED", groupId);
+        List<GroupMember> notifyMembers = memberRepo.findByGroupId(groupId);
+        Set<Long> notifyUsers = notifyMembers.stream()
+                .map(GroupMember::getUserId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
+
+        notifyGroupChanged(notifyUsers, "GROUP_MEMBER_REMOVED", groupId);
     }
 
     private String buildDefaultGroupName(Long creatorId, List<Long> memberIds) {

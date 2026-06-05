@@ -1,4 +1,14 @@
-import { Bot, Loader2, Send, Sparkles, X } from "lucide-react";
+import {
+  Bot,
+  ExternalLink,
+  FileText,
+  Image,
+  Link2,
+  Loader2,
+  Send,
+  Sparkles,
+  X,
+} from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 function AiAssistantBox({ open, onClose, onAsk }) {
@@ -8,6 +18,7 @@ function AiAssistantBox({ open, onClose, onAsk }) {
       role: "assistant",
       content:
         "Mình có thể hỗ trợ trả lời câu hỏi chung, kiểm tra bạn online, tìm file, ảnh, link và tóm tắt dữ liệu trong hội thoại đang mở.",
+      attachments: [],
     },
   ]);
   const [loading, setLoading] = useState(false);
@@ -30,12 +41,19 @@ function AiAssistantBox({ open, onClose, onAsk }) {
     setLoading(true);
 
     try {
-      const answer = await onAsk(text);
+      const result = await onAsk(text);
+      const answer =
+        typeof result === "string" ? result : result?.answer || "";
+      const attachments = Array.isArray(result?.attachments)
+        ? result.attachments
+        : [];
+
       setMessages((prev) => [
         ...prev,
         {
           role: "assistant",
           content: answer || "AI chưa có phản hồi.",
+          attachments,
         },
       ]);
     } catch (error) {
@@ -46,6 +64,7 @@ function AiAssistantBox({ open, onClose, onAsk }) {
           role: "assistant",
           content:
             "AI chưa trả lời được lúc này. Hãy kiểm tra backend hoặc Gemini API key.",
+          attachments: [],
         },
       ]);
     } finally {
@@ -82,7 +101,10 @@ function AiAssistantBox({ open, onClose, onAsk }) {
         </button>
       </div>
 
-      <div ref={scrollRef} className="h-[calc(100vh-220px)] min-h-[360px] max-h-[620px] overflow-y-auto px-4 py-4 space-y-3">
+      <div
+        ref={scrollRef}
+        className="h-[calc(100vh-220px)] min-h-[360px] max-h-[620px] overflow-y-auto px-4 py-4 space-y-3"
+      >
         {messages.map((message, index) => {
           const isUser = message.role === "user";
 
@@ -99,6 +121,54 @@ function AiAssistantBox({ open, onClose, onAsk }) {
                 }`}
               >
                 {message.content}
+
+                {message.attachments?.length > 0 && (
+                  <div className="mt-3 space-y-2 whitespace-normal">
+                    {message.attachments.map((item, itemIndex) => (
+                      <a
+                        key={`${item.type}_${item.id || item.url}_${itemIndex}`}
+                        href={item.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="group flex gap-3 rounded-xl border border-slate-600/70 bg-slate-900/80 p-2.5 text-left hover:border-emerald-400/70 hover:bg-slate-900"
+                      >
+                        {item.type === "image" ? (
+                          <div className="h-16 w-16 shrink-0 overflow-hidden rounded-lg bg-slate-700">
+                            <img
+                              src={item.thumbnailUrl || item.url}
+                              alt={item.title || "Ảnh trong chat"}
+                              className="h-full w-full object-cover"
+                            />
+                          </div>
+                        ) : (
+                          <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-slate-700 text-emerald-300">
+                            {item.type === "link" ? (
+                              <Link2 size={19} />
+                            ) : item.type === "image" ? (
+                              <Image size={19} />
+                            ) : (
+                              <FileText size={19} />
+                            )}
+                          </span>
+                        )}
+
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-sm font-semibold text-white">
+                            {item.title || "Tệp đính kèm"}
+                          </span>
+                          {item.subtitle && (
+                            <span className="mt-0.5 block truncate text-xs text-slate-400">
+                              {item.subtitle}
+                            </span>
+                          )}
+                          <span className="mt-1 inline-flex items-center gap-1 text-xs text-emerald-300">
+                            Mở xem <ExternalLink size={12} />
+                          </span>
+                        </span>
+                      </a>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
           );
