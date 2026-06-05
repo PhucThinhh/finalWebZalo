@@ -24,7 +24,7 @@ public class SocketEventListener {
     // userId -> danh sách sessionId đang online
     private final Map<String, Set<String>> userSessions = new ConcurrentHashMap<>();
 
-    private Set<String> getOnlineUserIds() {
+    public Set<String> getOnlineUserIds() {
         return userSessions.keySet();
     }
 

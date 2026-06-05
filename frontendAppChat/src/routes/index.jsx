@@ -22,7 +22,7 @@ function AppRoutes() {
       <Route
         path="/chat"
         element={
-          <ProtectedRoute roleRequired="USER">
+          <ProtectedRoute roleRequired={["USER", "ADMIN"]}>
             <Chat />
           </ProtectedRoute>
         }

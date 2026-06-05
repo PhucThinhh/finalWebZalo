@@ -1,6 +1,7 @@
 package com.chatapp.config;
 
 import com.chatapp.service.JwtService;
+import com.chatapp.repository.UserRepository;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -19,9 +20,11 @@ import java.util.List;
 public class JwtFilter extends OncePerRequestFilter {
 
     private final JwtService jwtService;
+    private final UserRepository userRepository;
 
-    public JwtFilter(JwtService jwtService) {
+    public JwtFilter(JwtService jwtService, UserRepository userRepository) {
         this.jwtService = jwtService;
+        this.userRepository = userRepository;
     }
 
     @Override
@@ -49,6 +52,18 @@ public class JwtFilter extends OncePerRequestFilter {
 
             if (jwtService.validateToken(token, subject)
                     && SecurityContextHolder.getContext().getAuthentication() == null) {
+
+                Long userId = Long.valueOf(subject);
+                boolean locked = userRepository.findById(userId)
+                        .map(user -> Boolean.TRUE.equals(user.getLocked()))
+                        .orElse(false);
+
+                if (locked) {
+                    response.setStatus(423);
+                    response.setContentType("text/plain;charset=UTF-8");
+                    response.getWriter().write("Tài khoản của bạn đã bị khóa");
+                    return;
+                }
 
                 String role = jwtService.extractRole(token);
 

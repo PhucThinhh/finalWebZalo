@@ -1,25 +1,37 @@
-import React from "react";
+import React, { useMemo, useRef } from "react";
 import {
   Alert,
+  Animated,
   Image,
   Linking,
+  PanResponder,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
 } from "react-native";
 import { recallMessageApi } from "../api/chatApi";
-import { formatTime, isImageFile, normalizeMobileFileUrl } from "../utils/chatHelpers";
+import {
+  formatTime,
+  isImageFile,
+  normalizeMobileFileUrl,
+} from "../utils/chatHelpers";
 
 type Props = {
   item: any;
   isMine: boolean;
-  /** Tin từ bot AI (senderId 0) */
   isBot?: boolean;
   onRecalled?: () => void;
+  onReply?: (message: any) => void;
 };
 
-export default function MessageBubble({ item, isMine, isBot, onRecalled }: Props) {
+export default function MessageBubble({
+  item,
+  isMine,
+  isBot,
+  onRecalled,
+  onReply,
+}: Props) {
   const content = item?.content || "";
   const createdAt = item?.createdAt || "";
   const fileUrl = normalizeMobileFileUrl(item?.fileUrl || "");
@@ -27,6 +39,51 @@ export default function MessageBubble({ item, isMine, isBot, onRecalled }: Props
   const isFile = type === "FILE" || !!fileUrl;
   const imageFile = isFile && fileUrl && isImageFile(fileUrl);
   const isRecalled = !!item?.isRecalled;
+  const replyContent =
+    item?.originalContent || (item?.originalMessageId ? "Tin nhắn" : "");
+
+  const translateX = useRef(new Animated.Value(0)).current;
+  const replyTriggeredRef = useRef(false);
+
+  const panResponder = useMemo(
+    () =>
+      PanResponder.create({
+      onMoveShouldSetPanResponder: (_, gesture) =>
+        !isRecalled &&
+        !isBot &&
+        gesture.dx > 12 &&
+        Math.abs(gesture.dx) > Math.abs(gesture.dy) * 1.4,
+      onPanResponderMove: (_, gesture) => {
+        const dx = Math.max(0, Math.min(gesture.dx, 96));
+        translateX.setValue(dx);
+        replyTriggeredRef.current = dx >= 72;
+      },
+      onPanResponderRelease: () => {
+        const shouldReply = replyTriggeredRef.current;
+        replyTriggeredRef.current = false;
+        Animated.spring(translateX, {
+          toValue: 0,
+          useNativeDriver: true,
+          tension: 80,
+          friction: 9,
+        }).start();
+
+        if (shouldReply) {
+          onReply?.(item);
+        }
+      },
+      onPanResponderTerminate: () => {
+        replyTriggeredRef.current = false;
+        Animated.spring(translateX, {
+          toValue: 0,
+          useNativeDriver: true,
+          tension: 80,
+          friction: 9,
+        }).start();
+      },
+      }),
+    [isRecalled, isBot, item, onReply, translateX]
+  );
 
   const handleLongPress = () => {
     if (isBot || !isMine || !item?.id) return;
@@ -51,41 +108,107 @@ export default function MessageBubble({ item, isMine, isBot, onRecalled }: Props
   };
 
   return (
-    <TouchableOpacity
-      activeOpacity={0.9}
-      onLongPress={handleLongPress}
-      disabled={!isMine || !!isBot}
-      style={[
-        styles.messageBubble,
-        isBot ? styles.botBubble : isMine ? styles.myBubble : styles.otherBubble,
-      ]}
-    >
-      {isBot && !isRecalled && (
-        <Text style={styles.botLabel}>Trợ lý AI</Text>
-      )}
-      {isRecalled ? (
-        <Text style={styles.recalledText}>Tin nhắn đã được thu hồi</Text>
-      ) : imageFile ? (
-        <TouchableOpacity onPress={() => Linking.openURL(fileUrl)}>
-          <Image source={{ uri: fileUrl }} style={styles.imageMessage} />
-        </TouchableOpacity>
-      ) : isFile ? (
-        <TouchableOpacity
-          style={styles.fileBox}
-          onPress={() => fileUrl && Linking.openURL(fileUrl)}
-        >
-          <Text style={styles.fileText}>{content || "Tệp đính kèm"}</Text>
-        </TouchableOpacity>
-      ) : (
-        <Text style={styles.messageText}>{content}</Text>
-      )}
+    <View style={styles.swipeRow}>
+      <Animated.View
+        pointerEvents="none"
+        style={[
+          styles.replyIndicator,
+          {
+            opacity: translateX.interpolate({
+              inputRange: [0, 40, 72],
+              outputRange: [0, 0.6, 1],
+              extrapolate: "clamp",
+            }),
+            transform: [
+              {
+                scale: translateX.interpolate({
+                  inputRange: [0, 72],
+                  outputRange: [0.8, 1],
+                  extrapolate: "clamp",
+                }),
+              },
+            ],
+          },
+        ]}
+      >
+        <Text style={styles.replyIndicatorText}>↩</Text>
+      </Animated.View>
 
-      <Text style={styles.timeText}>{formatTime(createdAt)}</Text>
-    </TouchableOpacity>
+      <Animated.View
+        {...panResponder.panHandlers}
+        style={{ transform: [{ translateX }] }}
+      >
+        <TouchableOpacity
+          activeOpacity={0.9}
+          onLongPress={handleLongPress}
+          disabled={!isMine || !!isBot}
+          style={[
+            styles.messageBubble,
+            isBot
+              ? styles.botBubble
+              : isMine
+                ? styles.myBubble
+                : styles.otherBubble,
+          ]}
+        >
+          {isBot && !isRecalled && <Text style={styles.botLabel}>Trợ lý AI</Text>}
+
+          {!isRecalled && !!replyContent && (
+            <View style={styles.replyPreview}>
+              <Text style={styles.replyTitle} numberOfLines={1}>
+                Trả lời
+              </Text>
+              <Text style={styles.replyText} numberOfLines={2}>
+                {replyContent}
+              </Text>
+            </View>
+          )}
+
+          {isRecalled ? (
+            <Text style={styles.recalledText}>Tin nhắn đã được thu hồi</Text>
+          ) : imageFile ? (
+            <TouchableOpacity onPress={() => Linking.openURL(fileUrl)}>
+              <Image source={{ uri: fileUrl }} style={styles.imageMessage} />
+            </TouchableOpacity>
+          ) : isFile ? (
+            <TouchableOpacity
+              style={styles.fileBox}
+              onPress={() => fileUrl && Linking.openURL(fileUrl)}
+            >
+              <Text style={styles.fileText}>{content || "Tệp đính kèm"}</Text>
+            </TouchableOpacity>
+          ) : (
+            <Text style={styles.messageText}>{content}</Text>
+          )}
+
+          <Text style={styles.timeText}>{formatTime(createdAt)}</Text>
+        </TouchableOpacity>
+      </Animated.View>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
+  swipeRow: {
+    position: "relative",
+  },
+  replyIndicator: {
+    position: "absolute",
+    left: 12,
+    top: "50%",
+    width: 34,
+    height: 34,
+    marginTop: -17,
+    borderRadius: 17,
+    backgroundColor: "#4F46E5",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  replyIndicatorText: {
+    color: "#FFFFFF",
+    fontSize: 20,
+    fontWeight: "700",
+  },
   messageBubble: {
     paddingHorizontal: 12,
     paddingVertical: 8,
@@ -116,6 +239,25 @@ const styles = StyleSheet.create({
     alignSelf: "flex-end",
     backgroundColor: "#D9F0FF",
     borderTopRightRadius: 6,
+  },
+  replyPreview: {
+    borderLeftWidth: 3,
+    borderLeftColor: "#3B82F6",
+    backgroundColor: "rgba(15, 23, 42, 0.08)",
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    marginBottom: 7,
+  },
+  replyTitle: {
+    color: "#2563EB",
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  replyText: {
+    color: "#4B5563",
+    fontSize: 13,
+    marginTop: 2,
   },
   messageText: {
     color: "#111827",

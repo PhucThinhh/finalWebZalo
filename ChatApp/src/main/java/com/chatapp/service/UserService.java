@@ -13,6 +13,7 @@ import com.chatapp.dto.UserResponse;
 
 import java.util.List;
 import java.util.Optional;
+import java.time.LocalDateTime;
 
 @Service
 public class UserService {
@@ -53,6 +54,13 @@ public class UserService {
         return userRepository.findByPhone(phone)
                 .filter(user -> passwordEncoder.matches(password, user.getPassword()));
 
+    }
+
+    public void updateLoginMetadata(User user, String ip, String userAgent) {
+        user.setLastLoginAt(LocalDateTime.now());
+        user.setLastLoginIp(ip);
+        user.setLastLoginUserAgent(userAgent);
+        userRepository.save(user);
     }
 
     public User getByPhone(String phone) {
@@ -168,6 +176,10 @@ public class UserService {
                 .avatar(user.getAvatar())
                 .coverImage(user.getCoverImage())
                 .role(user.getRole() != null ? user.getRole().name() : null)
+                .locked(Boolean.TRUE.equals(user.getLocked()))
+                .lastLoginAt(user.getLastLoginAt())
+                .lastLoginIp(user.getLastLoginIp())
+                .lastLoginUserAgent(user.getLastLoginUserAgent())
                 .build();
     }
     private String toGenderText(Gender gender) {

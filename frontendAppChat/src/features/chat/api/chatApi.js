@@ -211,3 +211,16 @@ export const addPollOptionApi = (pollId, text) => {
 export const closePollApi = (pollId) => {
   return axiosClient.put(`/chat/polls/${pollId}/close`);
 };
+
+export const suggestMessageByAiApi = (message) => {
+  return axiosClient.post("/chat/ai/suggestions", {
+    message,
+  });
+};
+
+export const askAiAssistantApi = ({ question, context }) => {
+  return axiosClient.post("/chat/ai/assistant", {
+    question,
+    context,
+  });
+};

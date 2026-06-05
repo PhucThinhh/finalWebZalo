@@ -22,3 +22,7 @@ export const forgotPasswordApi = (email) => {
 export const resetPasswordApi = (data) => {
 return axiosClient.post("auth/reset-password", data);
 };
+
+export const submitLockAppealApi = (data) => {
+  return axiosClient.post("/auth/lock-appeals", data);
+};

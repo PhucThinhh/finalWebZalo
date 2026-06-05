@@ -1,5 +1,7 @@
 package com.chatapp.controller;
 
+import com.chatapp.dto.AiSuggestionRequest;
+import com.chatapp.dto.AiAssistantRequest;
 import com.chatapp.dto.MessageResponseDTO;
 import com.chatapp.dto.PrivateConversationDTO;
 import com.chatapp.dto.ReactionEventDTO;
@@ -8,7 +10,9 @@ import com.chatapp.dto.UpdateNicknameRequest;
 import com.chatapp.entity.BackgroundScope;
 import com.chatapp.entity.ConversationNickname;
 import com.chatapp.entity.Message;
+import com.chatapp.service.AIService;
 import com.chatapp.service.ChatService;
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.messaging.handler.annotation.MessageMapping;
 import org.springframework.web.bind.annotation.*;
@@ -23,6 +27,7 @@ import java.util.Map;
 public class ChatController {
 
     private final ChatService chatService;
+    private final AIService aiService;
 
     // =========================
     // SEND MESSAGE (SOCKET)
@@ -235,5 +240,28 @@ public class ChatController {
         Long userId = Long.parseLong(principal.getName());
 
         return chatService.getPinnedMessages(roomId, userId);
+    }
+
+    @PostMapping("/ai/suggestions")
+    public Map<String, Object> suggestMessages(
+            @Valid @RequestBody AiSuggestionRequest request,
+            Principal principal
+    ) {
+        Long.parseLong(principal.getName());
+
+        return Map.of("suggestions", aiService.suggestMessageRewrites(request.getMessage()));
+    }
+
+    @PostMapping("/ai/assistant")
+    public Map<String, Object> askAssistant(
+            @Valid @RequestBody AiAssistantRequest request,
+            Principal principal
+    ) {
+        Long.parseLong(principal.getName());
+
+        return Map.of(
+                "answer",
+                aiService.answerWithContext(request.getQuestion(), request.getContext())
+        );
     }
 }

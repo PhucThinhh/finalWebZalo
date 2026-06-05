@@ -24,6 +24,22 @@ axiosClient.interceptors.response.use(
       window.location.href = "/";
     }
 
+    if (error.response?.status === 423) {
+      const lockedUser = {
+        phone: localStorage.getItem("phone") || "",
+        username: localStorage.getItem("username") || "",
+        message:
+          typeof error.response?.data === "string"
+            ? error.response.data
+            : "Tài khoản của bạn đã bị khóa",
+      };
+
+      localStorage.setItem("lockedAccountNotice", JSON.stringify(lockedUser));
+      localStorage.removeItem("token");
+      localStorage.removeItem("role");
+      window.location.href = "/login?locked=1";
+    }
+
     return Promise.reject(error);
   }
 );
