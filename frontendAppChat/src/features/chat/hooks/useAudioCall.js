@@ -42,7 +42,6 @@ function useAudioCall({
   const [isCameraOn, setIsCameraOn] = useState(false);
   const [callSeconds, setCallSeconds] = useState(0);
   const [callMediaType, setCallMediaType] = useState("AUDIO");
-  // AUDIO | VIDEO
 
   const peerRef = useRef(null);
   const localStreamRef = useRef(null);
@@ -56,11 +55,13 @@ function useAudioCall({
   const callTimeoutRef = useRef(null);
   const callStartedAtRef = useRef(null);
 
+  // Lưu roomId thật của cuộc gọi.
+  // Quan trọng khi người nhận đang mở boxchat khác.
+  const activeCallRoomIdRef = useRef(null);
+
   // ================= CALL TIMER =================
   useEffect(() => {
-    if (callStatus !== "IN_CALL") {
-      return;
-    }
+    if (callStatus !== "IN_CALL") return;
 
     const timer = setInterval(() => {
       setCallSeconds((prev) => prev + 1);
@@ -91,6 +92,8 @@ function useAudioCall({
 
     if (remoteAudioRef.current && remoteStreamRef.current) {
       remoteAudioRef.current.srcObject = remoteStreamRef.current;
+      remoteAudioRef.current.muted = false;
+      remoteAudioRef.current.volume = 1;
 
       remoteAudioRef.current
         .play()
@@ -131,14 +134,27 @@ function useAudioCall({
   // ================= LOCAL MEDIA =================
   const getLocalMediaStream = async (mediaType = "AUDIO") => {
     if (localStreamRef.current) {
+      localStreamRef.current.getAudioTracks().forEach((track) => {
+        track.enabled = true;
+      });
+
+      setIsMicMuted(false);
       return localStreamRef.current;
     }
 
     const needVideo = mediaType === "VIDEO";
 
     const stream = await navigator.mediaDevices.getUserMedia({
-      audio: true,
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
       video: needVideo,
+    });
+
+    stream.getAudioTracks().forEach((track) => {
+      track.enabled = true;
     });
 
     localStreamRef.current = stream;
@@ -147,6 +163,7 @@ function useAudioCall({
       localVideoRef.current.srcObject = stream;
     }
 
+    setIsMicMuted(false);
     setIsCameraOn(needVideo);
 
     return stream;
@@ -212,6 +229,7 @@ function useAudioCall({
 
     pendingCandidatesRef.current = [];
     callStartedAtRef.current = null;
+    activeCallRoomIdRef.current = null;
 
     setIncomingCall(null);
     setActiveCall(null);
@@ -224,8 +242,8 @@ function useAudioCall({
 
   // ================= PEER CONNECTION =================
   const createPeerConnection = useCallback(
-    (targetUserId) => {
-      if (!roomId || !currentUserId) return null;
+    (targetUserId, callRoomId = roomId) => {
+      if (!callRoomId || !currentUserId || !targetUserId) return null;
 
       const peer = new RTCPeerConnection(ICE_SERVERS);
 
@@ -234,7 +252,7 @@ function useAudioCall({
 
         sendCallSignalSocket({
           type: "ICE_CANDIDATE",
-          roomId,
+          roomId: callRoomId,
           callerId: Number(currentUserId),
           receiverId: Number(targetUserId),
           payload: {
@@ -252,6 +270,8 @@ function useAudioCall({
 
         if (remoteAudioRef.current) {
           remoteAudioRef.current.srcObject = remoteStream;
+          remoteAudioRef.current.muted = false;
+          remoteAudioRef.current.volume = 1;
 
           remoteAudioRef.current
             .play()
@@ -300,9 +320,10 @@ function useAudioCall({
     }
 
     try {
+      activeCallRoomIdRef.current = roomId;
       setCallMediaType("AUDIO");
 
-      const peer = createPeerConnection(selectedUser.id);
+      const peer = createPeerConnection(selectedUser.id, roomId);
       if (!peer) return;
 
       const localStream = await getLocalMediaStream("AUDIO");
@@ -390,9 +411,10 @@ function useAudioCall({
     }
 
     try {
+      activeCallRoomIdRef.current = roomId;
       setCallMediaType("VIDEO");
 
-      const peer = createPeerConnection(selectedUser.id);
+      const peer = createPeerConnection(selectedUser.id, roomId);
       if (!peer) return;
 
       const localStream = await getLocalMediaStream("VIDEO");
@@ -464,7 +486,10 @@ function useAudioCall({
 
   // ================= ACCEPT CALL =================
   const acceptCall = useCallback(async () => {
-    if (!incomingCall || !roomId || !currentUserId) return;
+    if (!incomingCall || !currentUserId) return;
+
+    const callRoomId = incomingCall.roomId || roomId;
+    if (!callRoomId) return;
 
     try {
       const offer = incomingCall.payload?.sdp;
@@ -476,9 +501,10 @@ function useAudioCall({
         return;
       }
 
+      activeCallRoomIdRef.current = callRoomId;
       setCallMediaType(mediaType);
 
-      const peer = createPeerConnection(incomingCall.callerId);
+      const peer = createPeerConnection(incomingCall.callerId, callRoomId);
       if (!peer) return;
 
       const localStream = await getLocalMediaStream(mediaType);
@@ -495,7 +521,7 @@ function useAudioCall({
 
       sendCallSignalSocket({
         type: "CALL_ACCEPT",
-        roomId: incomingCall.roomId,
+        roomId: callRoomId,
         callerId: Number(currentUserId),
         receiverId: Number(incomingCall.callerId),
         callerName: user?.username || "Người dùng",
@@ -509,7 +535,11 @@ function useAudioCall({
       clearMissedCallTimeout();
       callStartedAtRef.current = Date.now();
 
-      setActiveCall(incomingCall);
+      setActiveCall({
+        ...incomingCall,
+        roomId: callRoomId,
+      });
+
       setIncomingCall(null);
       setCallSeconds(0);
       setCallStatus("IN_CALL");
@@ -532,11 +562,12 @@ function useAudioCall({
   const rejectCall = useCallback(() => {
     if (!incomingCall || !currentUserId) return;
 
+    const callRoomId = incomingCall.roomId || roomId;
     const mediaType = incomingCall.payload?.mediaType || "AUDIO";
 
     sendCallSignalSocket({
       type: "CALL_REJECT",
-      roomId: incomingCall.roomId,
+      roomId: callRoomId,
       callerId: Number(currentUserId),
       receiverId: Number(incomingCall.callerId),
       payload: {
@@ -546,11 +577,14 @@ function useAudioCall({
 
     sendCallMessage("REJECTED", 0, mediaType);
     cleanupCall();
-  }, [incomingCall, currentUserId, sendCallMessage, cleanupCall]);
+  }, [incomingCall, roomId, currentUserId, sendCallMessage, cleanupCall]);
 
   // ================= END CALL =================
   const endCall = useCallback(() => {
-    if (!roomId || !currentUserId) {
+    const callRoomId =
+      activeCallRoomIdRef.current || activeCall?.roomId || roomId;
+
+    if (!callRoomId || !currentUserId) {
       cleanupCall();
       return;
     }
@@ -566,7 +600,7 @@ function useAudioCall({
 
     sendCallSignalSocket({
       type: "CALL_END",
-      roomId,
+      roomId: callRoomId,
       callerId: Number(currentUserId),
       receiverId: targetId ? Number(targetId) : null,
       payload: {
@@ -610,6 +644,14 @@ function useAudioCall({
       return;
     }
 
+    const callRoomId =
+      activeCallRoomIdRef.current || activeCall?.roomId || roomId;
+
+    if (!callRoomId) {
+      toast.error("Không tìm thấy phòng cuộc gọi");
+      return;
+    }
+
     try {
       const cameraStream = await navigator.mediaDevices.getUserMedia({
         video: true,
@@ -644,7 +686,7 @@ function useAudioCall({
 
       sendCallSignalSocket({
         type: "CALL_UPGRADE_VIDEO_OFFER",
-        roomId,
+        roomId: callRoomId,
         callerId: Number(currentUserId),
         receiverId: targetId ? Number(targetId) : null,
         payload: {
@@ -685,8 +727,6 @@ function useAudioCall({
 
     const videoTracks = stream.getVideoTracks();
 
-    // Đang gọi thoại, chưa có video track
-    // Chỉ cho bật camera khi đã vào cuộc gọi
     if (videoTracks.length === 0) {
       await upgradeAudioCallToVideo();
       return;
@@ -728,6 +768,7 @@ function useAudioCall({
           return;
         }
 
+        activeCallRoomIdRef.current = signal.roomId || roomId;
         setIncomingCall(signal);
         setCallMediaType(signal.payload?.mediaType || "AUDIO");
         setCallStatus("RINGING");
@@ -741,6 +782,7 @@ function useAudioCall({
 
           if (!answer || !peerRef.current) return;
 
+          activeCallRoomIdRef.current = signal.roomId || roomId;
           setCallMediaType(mediaType);
 
           await peerRef.current.setRemoteDescription(
@@ -752,7 +794,11 @@ function useAudioCall({
           clearMissedCallTimeout();
           callStartedAtRef.current = Date.now();
 
-          setActiveCall(signal);
+          setActiveCall({
+            ...signal,
+            roomId: signal.roomId || roomId,
+          });
+
           setCallSeconds(0);
           setCallStatus("IN_CALL");
 
@@ -778,6 +824,7 @@ function useAudioCall({
 
           if (!offer || !peerRef.current) return;
 
+          activeCallRoomIdRef.current = signal.roomId || roomId;
           setCallMediaType("VIDEO");
 
           await peerRef.current.setRemoteDescription(
@@ -791,7 +838,7 @@ function useAudioCall({
 
           sendCallSignalSocket({
             type: "CALL_UPGRADE_VIDEO_ANSWER",
-            roomId: signal.roomId,
+            roomId: signal.roomId || roomId,
             callerId: Number(currentUserId),
             receiverId: Number(signal.callerId),
             payload: {
@@ -813,6 +860,7 @@ function useAudioCall({
 
           if (!answer || !peerRef.current) return;
 
+          activeCallRoomIdRef.current = signal.roomId || roomId;
           setCallMediaType("VIDEO");
 
           await peerRef.current.setRemoteDescription(
@@ -845,7 +893,7 @@ function useAudioCall({
         cleanupCall();
       }
     },
-    [currentUserId, callStatus, clearMissedCallTimeout, cleanupCall]
+    [currentUserId, roomId, callStatus, clearMissedCallTimeout, cleanupCall]
   );
 
   return {

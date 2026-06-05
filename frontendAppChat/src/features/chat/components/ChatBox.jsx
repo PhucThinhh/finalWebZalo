@@ -30,6 +30,7 @@ const ChatBox = memo(
     chatBackground,
     onClearReactions,
     pollRealtimeMap = {},
+    onJoinGroupCall,
   }) => {
     const [, setSelectedMessageId] = useState(null);
     const [hoveredMessageId, setHoveredMessageId] = useState(null);
@@ -54,6 +55,20 @@ const ChatBox = memo(
       }
 
       setReactionPickerId(messageId);
+    };
+
+    const parseGroupCallInvite = (content) => {
+      const text = String(content || "");
+
+      if (!text.startsWith("__GROUP_CALL_INVITE__")) {
+        return null;
+      }
+
+      try {
+        return JSON.parse(text.replace("__GROUP_CALL_INVITE__", ""));
+      } catch {
+        return null;
+      }
     };
 
     const closeReactionPickerLater = () => {
@@ -727,6 +742,52 @@ const ChatBox = memo(
                             ) : msg.type === "CALL" ? (
                               (() => {
                                 const content = String(msg.content || "");
+
+                                // ================= GROUP CALL INVITE =================
+                                const groupCallInvite =
+                                  parseGroupCallInvite(content);
+
+                                if (groupCallInvite) {
+                                  return (
+                                    <div className="w-[270px] rounded-2xl bg-blue-950/80 border border-blue-700/60 px-4 py-3 shadow-lg">
+                                      <div className="flex items-center gap-3">
+                                        <div className="w-11 h-11 rounded-full bg-blue-500/20 flex items-center justify-center text-2xl">
+                                          {groupCallInvite.mediaType === "VIDEO"
+                                            ? "🎥"
+                                            : "📞"}
+                                        </div>
+
+                                        <div className="min-w-0 flex-1">
+                                          <div className="text-sm font-semibold text-white">
+                                            {groupCallInvite.title ||
+                                              "Cuộc gọi nhóm"}
+                                          </div>
+
+                                          <div className="text-xs text-slate-300 mt-0.5 truncate">
+                                            {groupCallInvite.startedBy ||
+                                              "Ai đó"}{" "}
+                                            đã bắt đầu cuộc gọi
+                                          </div>
+                                        </div>
+                                      </div>
+
+                                      <div className="h-px bg-blue-800/70 my-3" />
+
+                                      <button
+                                        type="button"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          onJoinGroupCall?.(groupCallInvite);
+                                        }}
+                                        className="w-full py-2 rounded-xl bg-blue-500 hover:bg-blue-600 text-white text-sm font-semibold transition"
+                                      >
+                                        Tham gia
+                                      </button>
+                                    </div>
+                                  );
+                                }
+
+                                // ================= NORMAL CALL CARD =================
                                 const rawStatus = String(
                                   msg.callStatus || ""
                                 ).toUpperCase();
@@ -738,9 +799,15 @@ const ChatBox = memo(
                                     ""
                                 ).toUpperCase();
 
+                                const lowerContent = content.toLowerCase();
+
+                                const isGroupCall =
+                                  lowerContent.includes("nhóm") ||
+                                  String(msg.roomId || "").startsWith("group_");
+
                                 const isVideo =
                                   callType === "VIDEO" ||
-                                  content.toLowerCase().includes("video");
+                                  lowerContent.includes("video");
 
                                 const durationText =
                                   msg.callDuration ||
@@ -755,15 +822,17 @@ const ChatBox = memo(
 
                                 const isRejected =
                                   rawStatus === "REJECTED" ||
-                                  content.toLowerCase().includes("từ chối") ||
-                                  content.toLowerCase().includes("bị từ chối");
+                                  lowerContent.includes("từ chối") ||
+                                  lowerContent.includes("bị từ chối");
 
                                 const isEnded =
                                   rawStatus === "ENDED" ||
                                   content.includes("Cuộc gọi thoại đi") ||
                                   content.includes("Cuộc gọi thoại đến") ||
                                   content.includes("Cuộc gọi video đi") ||
-                                  content.includes("Cuộc gọi video đến");
+                                  content.includes("Cuộc gọi video đến") ||
+                                  content.includes("Cuộc gọi thoại nhóm") ||
+                                  content.includes("Cuộc gọi video nhóm");
 
                                 const title = isMissed
                                   ? isMe
@@ -777,6 +846,10 @@ const ChatBox = memo(
                                   ? isVideo
                                     ? "Cuộc gọi video bị từ chối"
                                     : "Cuộc gọi bị từ chối"
+                                  : isGroupCall
+                                  ? isVideo
+                                    ? "Cuộc gọi video nhóm"
+                                    : "Cuộc gọi thoại nhóm"
                                   : isMe
                                   ? isVideo
                                     ? "Cuộc gọi video đi"
@@ -799,13 +872,11 @@ const ChatBox = memo(
 
                                     <div className="flex items-center gap-2 mt-2 text-slate-300 text-sm">
                                       <span>
-                                        {isMissed
-                                          ? "📞"
-                                          : isRejected
+                                        {isRejected
                                           ? "📵"
                                           : isVideo
                                           ? "🎥"
-                                          : "📱"}
+                                          : "📞"}
                                       </span>
 
                                       <span>{subText}</span>
@@ -1135,8 +1206,6 @@ const ChatBox = memo(
             </div>
           </div>
         )}
-
-        
       </div>
     );
   }

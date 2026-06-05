@@ -22,6 +22,7 @@ import { getUserInfoApi } from "../../user/api/userApi";
 import CreatePollModal from "../components/CreatePollModal";
 
 import useAudioCall from "../hooks/useAudioCall";
+import useGroupCall from "../hooks/useGroupCall";
 
 import {
   disconnectSocket,
@@ -74,7 +75,90 @@ import { getMessagesApi } from "../api/chatApi";
 
 const DEFAULT_AVATAR =
   'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><circle cx="32" cy="32" r="32" fill="%231e293b"/><circle cx="32" cy="24" r="12" fill="%23e2e8f0"/><path d="M12 56c4-12 14-18 20-18s16 6 20 18" fill="%23e2e8f0"/></svg>';
+function VideoTile({
+  stream,
+  showVideo = true,
+  name,
+  avatarSrc,
+  isMe = false,
+  muted = false,
+}) {
+  const videoRef = useRef(null);
+  const audioRef = useRef(null);
 
+  useEffect(() => {
+    if (!stream) return;
+
+    if (showVideo && videoRef.current) {
+      if (videoRef.current.srcObject !== stream) {
+        videoRef.current.srcObject = stream;
+      }
+
+      videoRef.current.muted = muted;
+      videoRef.current.volume = 1;
+
+      videoRef.current
+        .play()
+        .catch((error) => console.log("Play video stream lỗi:", error));
+    }
+
+    if (!showVideo && audioRef.current) {
+      if (audioRef.current.srcObject !== stream) {
+        audioRef.current.srcObject = stream;
+      }
+
+      audioRef.current.muted = muted;
+      audioRef.current.volume = 1;
+
+      audioRef.current
+        .play()
+        .catch((error) => console.log("Play audio stream lỗi:", error));
+    }
+  }, [stream, showVideo, muted]);
+
+  return (
+    <div className="relative rounded-2xl overflow-hidden bg-black border border-white/10">
+      {stream && showVideo ? (
+        <video
+          ref={videoRef}
+          autoPlay
+          muted={muted}
+          playsInline
+          className="w-full h-full object-cover"
+        />
+      ) : (
+        <div className="w-full h-full flex items-center justify-center bg-slate-800">
+          <audio ref={audioRef} autoPlay playsInline />
+
+          <div className="text-center">
+            <img
+              src={avatarSrc || DEFAULT_AVATAR}
+              alt=""
+              className="w-24 h-24 rounded-full object-cover mx-auto"
+              onError={(e) => {
+                e.currentTarget.src = DEFAULT_AVATAR;
+              }}
+            />
+
+            <div className="text-white font-semibold mt-3">
+              {name || "Người dùng"}
+            </div>
+
+            {!showVideo && stream && (
+              <div className="text-xs text-emerald-400 mt-1">
+                Đang kết nối âm thanh
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      <div className="absolute bottom-3 left-3 px-3 py-1 rounded-full bg-black/60 text-white text-sm">
+        {isMe ? "Bạn" : name}
+      </div>
+    </div>
+  );
+}
 function ChatPage() {
   const navigate = useNavigate();
 
@@ -197,7 +281,27 @@ function ChatPage() {
     }
 
     if (msg.type === "CALL") {
-      return msg.content || "Cuộc gọi";
+      const groupCallInvite = parseGroupCallInvite(msg.content);
+
+      if (groupCallInvite) {
+        return groupCallInvite.mediaType === "VIDEO"
+          ? "Cuộc gọi video nhóm đang diễn ra"
+          : "Cuộc gọi thoại nhóm đang diễn ra";
+      }
+
+      const content = String(msg.content || "");
+
+      if (msg.callStatus === "STARTED") {
+        return msg.callType === "VIDEO"
+          ? "Cuộc gọi video nhóm đang diễn ra"
+          : "Cuộc gọi thoại nhóm đang diễn ra";
+      }
+
+      if (msg.callStatus === "ENDED") {
+        return content || "Cuộc gọi nhóm đã kết thúc";
+      }
+
+      return content || "Cuộc gọi";
     }
 
     const isMe = Number(msg.senderId) === Number(currentUserId);
@@ -252,6 +356,21 @@ function ChatPage() {
     if (r === "OWNER") return "Chủ nhóm";
     if (r === "ADMIN") return "Quản trị";
     return "Thành viên";
+  };
+
+
+  const parseGroupCallInvite = (content) => {
+    const text = String(content || "");
+
+    if (!text.startsWith("__GROUP_CALL_INVITE__")) {
+      return null;
+    }
+
+    try {
+      return JSON.parse(text.replace("__GROUP_CALL_INVITE__", ""));
+    } catch {
+      return null;
+    }
   };
 
   /** Backend GET /chat/group/members → GroupMemberDTO: userId, username, avatar, role */
@@ -1221,6 +1340,127 @@ function ChatPage() {
     loadPinnedMessages();
   }, [roomId]);
 
+  const handleSendGroupCallMessage = ({
+    status,
+    mediaType,
+    durationText,
+    callId,
+    groupId,
+    groupName,
+  }) => {
+    if (!roomId || !currentUserId || !selectedGroup?.id) return;
+
+    const callName =
+      mediaType === "VIDEO" ? "Cuộc gọi video nhóm" : "Cuộc gọi thoại nhóm";
+
+    let content = "";
+
+    if (status === "STARTED") {
+      content =
+        "__GROUP_CALL_INVITE__" +
+        JSON.stringify({
+          status: "STARTED",
+          callId,
+          groupId: groupId || selectedGroup.id,
+          groupName: groupName || selectedGroup.name,
+          mediaType,
+          title: callName,
+          startedBy: user?.username || "Người dùng",
+        });
+    } else {
+      content = status === "ENDED" ? `${callName} · ${durationText}` : callName;
+    }
+
+    const tempId = `temp_group_call_${Date.now()}`;
+    const createdAt = new Date().toISOString();
+
+    const msg = {
+      tempId,
+      senderId: Number(currentUserId),
+      receiverId: null,
+      roomId,
+      content,
+      type: "CALL",
+      callStatus: status,
+      callType: mediaType,
+      callDuration: durationText,
+      createdAt,
+    };
+
+    // Hiện ngay trong boxchat của người bắt đầu gọi
+    addMessage({
+      id: tempId,
+      tempId,
+      senderId: Number(currentUserId),
+      receiverId: null,
+      roomId,
+      content,
+      type: "CALL",
+      callStatus: status,
+      callType: mediaType,
+      callDuration: durationText,
+      createdAt,
+      deletedBy: null,
+      isRecalled: false,
+      reactions: [],
+      pinned: false,
+      pinnedBy: null,
+      pinnedAt: null,
+    });
+
+    sendMessageSocket(msg);
+
+    upsertConversation({
+      id: `group_${selectedGroup.id}`,
+      type: "GROUP",
+      name: selectedGroup.name,
+      avatar: resolveAvatar(selectedGroup.avatar),
+      roomId,
+      lastMessageAt: createdAt,
+      lastMessageText:
+        status === "STARTED"
+          ? mediaType === "VIDEO"
+            ? "Cuộc gọi video nhóm đang diễn ra"
+            : "Cuộc gọi thoại nhóm đang diễn ra"
+          : content,
+      targetGroup: selectedGroup,
+    });
+  };
+
+  const {
+    incomingGroupCall,
+    groupCallStatus,
+    groupCallMediaType,
+    groupCallTimeText,
+
+    participants,
+    remoteStreams,
+
+    localVideoRef: groupLocalVideoRef,
+
+    isGroupMicMuted,
+    isGroupCameraOn,
+
+    startGroupAudioCall,
+    startGroupVideoCall,
+    acceptGroupCall,
+    rejectGroupCall,
+    endGroupCall,
+    leaveGroupCall,
+
+    toggleGroupMic,
+    toggleGroupCamera,
+    joinExistingGroupCall,
+
+    handleGroupCallSignal,
+  } = useGroupCall({
+    roomId,
+    currentUserId,
+    user,
+    selectedGroup,
+    onGroupCallMessage: handleSendGroupCallMessage,
+  });
+
   const loadPrivateNickname = async (targetRoomId, targetUserId) => {
     if (!targetRoomId || !targetUserId) {
       setFriendNickname("");
@@ -1623,6 +1863,10 @@ function ChatPage() {
           pinnedAt: msg.pinnedAt,
 
           pollId: msg.pollId,
+
+          callStatus: msg.callStatus,
+          callType: msg.callType,
+          callDuration: msg.callDuration,
         }));
 
         setMessages(history);
@@ -1659,14 +1903,17 @@ function ChatPage() {
   }, [roomId, setMessages]);
 
   useEffect(() => {
-    if (!roomId) return;
+    if (!currentUserId) return;
 
-    const sub = subscribeCallSignal(roomId, handleCallSignal);
+    const sub = subscribeCallSignal(currentUserId, (signal) => {
+      handleCallSignal(signal);
+      handleGroupCallSignal(signal);
+    });
 
     return () => {
       sub?.unsubscribe();
     };
-  }, [roomId, handleCallSignal]);
+  }, [currentUserId, handleCallSignal, handleGroupCallSignal]);
 
   useEffect(() => {
     if (!selectedGroup?.id || !currentUserId) {
@@ -1828,6 +2075,10 @@ function ChatPage() {
               pinned: message.pinned,
               pinnedBy: message.pinnedBy,
               pinnedAt: message.pinnedAt,
+
+              callStatus: message.callStatus,
+              callType: message.callType,
+              callDuration: message.callDuration,
             };
 
             setMessages((prev) => {
@@ -2972,6 +3223,8 @@ function ChatPage() {
 
   const isCurrentConversationPinned =
     !!selectedConversationId && pinnedConversationIds.has(selectedConversationId);
+  
+    
 
   return (
     <div className="w-screen h-screen flex bg-[#0f172a] overflow-hidden text-slate-200 font-sans relative">
@@ -3228,6 +3481,28 @@ function ChatPage() {
                     </>
                   )}
 
+                  {selectedGroup && !isRemovedFromGroup && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={startGroupAudioCall}
+                        className="w-11 h-11 rounded-full flex items-center justify-center text-slate-300 hover:bg-white/10 hover:text-white transition"
+                        title="Gọi thoại nhóm"
+                      >
+                        📞
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={startGroupVideoCall}
+                        className="w-11 h-11 rounded-full flex items-center justify-center text-slate-300 hover:bg-white/10 hover:text-white transition"
+                        title="Gọi video nhóm"
+                      >
+                        🎥
+                      </button>
+                    </>
+                  )}
+
                   <button
                     type="button"
                     onClick={() => setInfoPanelOpen((prev) => !prev)}
@@ -3349,6 +3624,7 @@ function ChatPage() {
                   onPinMessage={handlePinMessage}
                   onUnpinMessage={handleUnpinMessage}
                   pollRealtimeMap={pollRealtimeMap}
+                  onJoinGroupCall={joinExistingGroupCall}
                   onReactMessage={async (messageId, emoji) => {
                     try {
                       await reactMessageApi(messageId, emoji);
@@ -3695,6 +3971,81 @@ function ChatPage() {
                     onChange={handleChangeChatBackground}
                   />
                 </label>
+
+                {selectedGroup && !isRemovedFromGroup && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={handleOpenViewMembersModal}
+                      className="w-full flex items-center gap-3 px-1 py-3 rounded-lg hover:bg-white/5 text-left"
+                    >
+                      <span className="w-10 h-10 rounded-full bg-slate-700 flex items-center justify-center text-xl">
+                        👥
+                      </span>
+                      <div>
+                        <div className="font-semibold">Thành viên nhóm</div>
+                        <div className="text-xs text-slate-400">
+                          Xem danh sách {groupMemberCount} thành viên
+                        </div>
+                      </div>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={handleOpenAddMemberModal}
+                      className="w-full flex items-center gap-3 px-1 py-3 rounded-lg hover:bg-white/5 text-left"
+                    >
+                      <span className="w-10 h-10 rounded-full bg-slate-700 flex items-center justify-center text-xl text-blue-300">
+                        +
+                      </span>
+                      <span className="font-semibold">Thêm thành viên</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={handleOpenRemoveMemberModal}
+                      className="w-full flex items-center gap-3 px-1 py-3 rounded-lg hover:bg-white/5 text-left text-red-400"
+                    >
+                      <span className="w-10 h-10 rounded-full bg-red-500/10 flex items-center justify-center text-xl">
+                        −
+                      </span>
+                      <span className="font-semibold">Xoá thành viên</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={handleOpenUpdateRoleModal}
+                      className="w-full flex items-center gap-3 px-1 py-3 rounded-lg hover:bg-white/5 text-left"
+                    >
+                      <span className="w-10 h-10 rounded-full bg-slate-700 flex items-center justify-center text-xl">
+                        🛡
+                      </span>
+                      <span className="font-semibold">Cập nhật quyền</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={handleOpenLeaveGroupConfirm}
+                      className="w-full flex items-center gap-3 px-1 py-3 rounded-lg hover:bg-red-500/10 text-left text-red-400"
+                    >
+                      <span className="w-10 h-10 rounded-full bg-red-500/10 flex items-center justify-center text-xl">
+                        🚪
+                      </span>
+                      <span className="font-semibold">Rời nhóm</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={handleDeleteGroup}
+                      className="w-full flex items-center gap-3 px-1 py-3 rounded-lg hover:bg-red-500/10 text-left text-red-400"
+                    >
+                      <span className="w-10 h-10 rounded-full bg-red-500/10 flex items-center justify-center text-xl">
+                        🗑️
+                      </span>
+                      <span className="font-semibold">Giải tán nhóm</span>
+                    </button>
+                  </>
+                )}
 
                 {!selectedGroup && selectedUser && (
                   <button
@@ -5312,6 +5663,44 @@ function ChatPage() {
         </div>
       )}
 
+      {incomingGroupCall && groupCallStatus === "RINGING" && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[1600]">
+          <div className="w-[380px] bg-white text-slate-900 rounded-2xl shadow-2xl p-6 text-center">
+            <div className="w-20 h-20 rounded-full bg-violet-100 flex items-center justify-center mx-auto text-4xl mb-4">
+              {incomingGroupCall?.payload?.mediaType === "VIDEO" ? "🎥" : "📞"}
+            </div>
+
+            <h3 className="text-xl font-bold">
+              {incomingGroupCall.callerName || "Ai đó"} đang gọi nhóm
+            </h3>
+
+            <p className="text-sm text-slate-500 mt-1">
+              {incomingGroupCall?.payload?.groupName ||
+                selectedGroup?.name ||
+                "Nhóm chat"}
+            </p>
+
+            <div className="flex gap-3 mt-6">
+              <button
+                type="button"
+                onClick={rejectGroupCall}
+                className="flex-1 py-3 rounded-xl bg-red-500 text-white font-semibold hover:bg-red-600"
+              >
+                Từ chối
+              </button>
+
+              <button
+                type="button"
+                onClick={acceptGroupCall}
+                className="flex-1 py-3 rounded-xl bg-green-500 text-white font-semibold hover:bg-green-600"
+              >
+                Tham gia
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <audio ref={remoteAudioRef} autoPlay playsInline />
 
       {callStatus !== "IDLE" && callStatus !== "RINGING" && (
@@ -5469,6 +5858,147 @@ function ChatPage() {
                 type="button"
                 onClick={() => toast.info("Cài đặt cuộc gọi sẽ làm sau")}
                 className="w-14 h-14 rounded-full border border-white/10 bg-white/5 hover:bg-white/10 text-white flex items-center justify-center transition [&>span]:hidden"
+                title="Cài đặt"
+              >
+                <Settings size={28} strokeWidth={2.2} />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {groupCallStatus === "IN_CALL" && (
+        <div className="fixed inset-0 z-[1600] bg-gradient-to-br from-slate-950 via-violet-950 to-slate-900 flex items-center justify-center">
+          <div className="w-[980px] h-[720px] max-h-[92vh] bg-slate-900 rounded-[24px] shadow-2xl overflow-hidden border border-white/10 flex flex-col">
+            <div className="h-[64px] bg-slate-950 flex items-center justify-between px-6 shrink-0 border-b border-white/10">
+              <div>
+                <div className="text-white font-bold text-lg">
+                  {groupCallMediaType === "VIDEO"
+                    ? "Gọi video nhóm"
+                    : "Gọi thoại nhóm"}
+                </div>
+
+                <div className="text-xs text-slate-400">
+                  {participants.length} người tham gia · {groupCallTimeText}
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={leaveGroupCall}
+                className="w-9 h-9 rounded-full hover:bg-white/10 text-slate-300"
+                title="Rời cuộc gọi"
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="flex-1 p-5 overflow-hidden">
+              <div className="grid grid-cols-2 gap-4 h-full">
+                <div className="relative rounded-2xl overflow-hidden bg-black border border-white/10">
+                  {groupCallMediaType === "VIDEO" ? (
+                    <video
+                      ref={groupLocalVideoRef}
+                      autoPlay
+                      muted
+                      playsInline
+                      className={`w-full h-full object-cover ${
+                        isGroupCameraOn ? "" : "hidden"
+                      }`}
+                    />
+                  ) : null}
+
+                  {(groupCallMediaType !== "VIDEO" || !isGroupCameraOn) && (
+                    <div className="w-full h-full flex items-center justify-center bg-slate-800">
+                      <div className="text-center">
+                        <img
+                          src={resolveAvatar(user?.avatar)}
+                          alt=""
+                          className="w-24 h-24 rounded-full object-cover mx-auto"
+                          onError={(e) => {
+                            e.currentTarget.src = DEFAULT_AVATAR;
+                          }}
+                        />
+
+                        <div className="text-white font-semibold mt-3">
+                          {user?.username || "Bạn"}
+                        </div>
+
+                        {groupCallMediaType === "VIDEO" && (
+                          <div className="text-xs text-slate-400 mt-1">
+                            Camera đang tắt
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="absolute bottom-3 left-3 px-3 py-1 rounded-full bg-black/60 text-white text-sm">
+                    Bạn {isGroupMicMuted ? "· Tắt mic" : ""}
+                  </div>
+                </div>
+                {participants
+                  .filter((p) => Number(p.userId) !== Number(currentUserId))
+                  .map((p) => (
+                    <VideoTile
+                      key={p.userId}
+                      stream={remoteStreams[p.userId]}
+                      showVideo={groupCallMediaType === "VIDEO"}
+                      name={p.username || `User ${p.userId}`}
+                      avatarSrc={resolveAvatar(p.avatar)}
+                      isMe={false}
+                    />
+                  ))}
+              </div>
+            </div>
+
+            <div className="h-[92px] bg-black flex items-center justify-center gap-6 shrink-0">
+              <button
+                type="button"
+                onClick={toggleGroupCamera}
+                className={`h-14 px-6 rounded-full border flex items-center gap-3 transition ${
+                  isGroupCameraOn
+                    ? "bg-white/5 border-white/15 text-white hover:bg-white/10"
+                    : "bg-red-500/20 border-red-400 text-red-300"
+                }`}
+                title={isGroupCameraOn ? "Tắt camera" : "Bật camera"}
+              >
+                <Video size={25} strokeWidth={2.2} />
+                <ChevronUp size={20} className="text-white/70" />
+              </button>
+
+              <button
+                type="button"
+                onClick={endGroupCall}
+                className="w-16 h-16 rounded-full bg-red-500 hover:bg-red-600 text-white flex items-center justify-center shadow-lg transition"
+                title="Kết thúc cuộc gọi nhóm"
+              >
+                <PhoneOff size={30} strokeWidth={2.4} />
+              </button>
+
+              <button
+                type="button"
+                onClick={toggleGroupMic}
+                className={`h-14 px-6 rounded-full border flex items-center gap-3 transition ${
+                  isGroupMicMuted
+                    ? "bg-red-500/20 border-red-400 text-red-300"
+                    : "bg-white/5 border-white/15 text-white hover:bg-white/10"
+                }`}
+                title={isGroupMicMuted ? "Bật micro" : "Tắt micro"}
+              >
+                {isGroupMicMuted ? (
+                  <MicOff size={26} strokeWidth={2.2} />
+                ) : (
+                  <Mic size={26} strokeWidth={2.2} />
+                )}
+
+                <ChevronUp size={20} className="text-white/70" />
+              </button>
+
+              <button
+                type="button"
+                onClick={() => toast.info("Cài đặt cuộc gọi nhóm sẽ làm sau")}
+                className="w-14 h-14 rounded-full border border-white/10 bg-white/5 hover:bg-white/10 text-white flex items-center justify-center transition"
                 title="Cài đặt"
               >
                 <Settings size={28} strokeWidth={2.2} />

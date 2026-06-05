@@ -420,14 +420,14 @@ export const sendCallSignalSocket = (signal) => {
   });
 };
 
-export const subscribeCallSignal = (roomId, callback) => {
-  if (!roomId) return null;
+export const subscribeCallSignal = (userId, callback) => {
+  if (!userId) return null;
 
   if (!stompClient || connectionState !== "CONNECTED") {
     return null;
   }
 
-  return stompClient.subscribe(`/topic/call/${roomId}`, (msg) => {
+  return stompClient.subscribe(`/topic/call/user/${userId}`, (msg) => {
     try {
       const data = JSON.parse(msg.body || "{}");
       console.log("📞 CALL SIGNAL:", data);
